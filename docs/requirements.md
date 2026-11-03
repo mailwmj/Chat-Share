@@ -9,17 +9,18 @@
 | 项目 | 决定 |
 |---|---|
 | 入口 | workspace 顶部工具栏右侧的按钮（`addHeaderButton`，`popover`），窄窗口时收进 workspace 菜单（文档所述，待用户确认）；面板列出当前 workspace 的 agent |
-| 操作 | 点一个 agent 就上传，并把链接复制到剪贴板，没有二次确认 |
+| 操作 | 安装后在 workspace 的分享面板点一个 agent 就立即上传，并把链接复制到剪贴板，没有二次确认 |
 | 范围 | 单个 agent 点击那一刻的整个会话，支持 Claude Code 和 Codex；再次分享生成新链接 |
 | 内容 | Paseo 时间线的全部条目，保留原始字段；本地图片（`file:`、`data:`）换成一行标记，`http(s)` 图片保留；子代理保持时间线原样，不去取子会话过程 |
 | 保护 | 不加密、不扫描敏感信息，有链接就能读全文（用户的明确决定） |
-| 存储 | GitHub secret Gist，优先复用 `gh` 登录状态，否则用插件设置里 `gist` 权限的 token |
+| 存储 | GitHub secret Gist，仅通过服务器上的 `gh auth token` 认证；需安装 GitHub CLI 并运行 `gh auth login` 登录、授权创建 Gist |
 | 有效期 | 长期有效，发送方到 GitHub 删除 Gist 来撤回，插件不做分享管理；删除后链接约 5 分钟才失效，已下载或已打开的副本不受影响 |
 | 上限 | 10 MB（10,000,000 字节）；超过就显示大小并报错，绝不悄悄丢内容 |
-| 查看器 | Cloudflare Pages 上的静态页面，地址可在插件设置里修改 |
+| 查看器 | 默认 `https://chat-share.pages.dev`；插件设置可覆盖地址，留空或清空恢复默认 |
 | 链接 | `https://<查看器>.pages.dev/#<GitHub用户名>/<gistID>`，浏览器直接读 Gist raw 地址，不走 GitHub API |
 | 发布 | 先通过 `paseo plugin install github:…` 在团队内试用，稳定后再提交 paseo.sh |
 | 语言 | 查看器跟随浏览器语言，插件面板用中文 |
+| 许可 | MIT，Copyright (c) 2026 mailwmj，见根目录 `LICENSE` |
 
 ### 查看器
 

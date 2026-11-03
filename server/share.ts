@@ -3,14 +3,17 @@ import { URL } from 'node:url';
 import { toShare } from '../shared/convert';
 import { MAX_SHARE_BYTES, SHARE_FILENAME, ShareError, isObject, type SessionMetadata, type ShareDocument } from '../shared/format';
 import { readSnapshot, type Refetch } from '../shared/snapshot';
+import { DEFAULT_VIEWER_URL } from '../shared/plugin';
 
-export interface ShareSettings { viewerUrl: string; fallbackToken: string }
+export interface ShareSettings { viewerUrl?: string }
 export interface ShareSource { session: SessionMetadata; refetch: Refetch }
 
+export class ShareFailure extends Error {}
+
 const messages = {
-  login: '未登录 GitHub。请在服务器运行 gh auth login，或在插件设置填写具有 gist 权限的备用 token。',
-  token: 'GitHub token 被拒绝或缺少 gist 权限。请更新 gh 登录授权或备用 token。',
-  viewer: '未配置查看器地址。请先在插件设置填写查看器 URL。',
+  login: '请在服务器安装 GitHub CLI（gh），并运行 gh auth login 登录。',
+  token: 'GitHub token 被拒绝或缺少 gist 权限。请重新运行 gh auth login 授权。',
+  viewer: '查看器地址无效，请在插件设置中修改。',
   snapshot: '读取会话快照失败。请稍后重试。',
   network: '无法连接 GitHub 或读取上传结果。请检查服务器网络后重试。',
   rate: 'GitHub 请求受限。请等待限流解除后重试。',
@@ -25,20 +28,19 @@ export function ghToken(): Promise<string> {
   });
 }
 
-export async function resolveToken(fallback: string, readGh = ghToken): Promise<string> {
+export async function resolveToken(readGh = ghToken): Promise<string> {
   let token: string;
   try { token = (await readGh()).trim(); } catch { token = ''; }
-  token ||= fallback.trim();
-  if (!token) throw new Error(messages.login);
+  if (!token) throw new ShareFailure(messages.login);
   return token;
 }
 
-function viewerBase(value: string): URL {
+function viewerBase(value?: string): URL {
   try {
-    const url = new URL(value);
+    const url = new URL(value?.trim() || DEFAULT_VIEWER_URL);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error();
     return url;
-  } catch { throw new Error(messages.viewer); }
+  } catch { throw new ShareFailure(messages.viewer); }
 }
 
 /** Only this server module sends credentials and content to GitHub. No automatic POST retry. */
@@ -47,8 +49,8 @@ export async function uploadShare(share: ShareDocument, settings: ShareSettings,
 } = {}): Promise<{ url: string }> {
   const viewer = viewerBase(settings.viewerUrl);
   const content = JSON.stringify(share), bytes = Buffer.byteLength(content, 'utf8');
-  if (bytes > MAX_SHARE_BYTES) throw new Error(`会话过大：${bytes.toLocaleString('zh-CN')} 字节；上限为 10,000,000 字节。`);
-  const token = await resolveToken(settings.fallbackToken, dependencies.readGh);
+  if (bytes > MAX_SHARE_BYTES) throw new ShareFailure(`会话过大：${bytes.toLocaleString('zh-CN')} 字节；上限为 10,000,000 字节。`);
+  const token = await resolveToken(dependencies.readGh);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
   let response: Response;
@@ -60,13 +62,13 @@ export async function uploadShare(share: ShareDocument, settings: ShareSettings,
       body: JSON.stringify({ public: false, description: 'Chat-Share snapshot', files: { [SHARE_FILENAME]: { content } } }),
     });
     if (response.ok) value = await response.json();
-  } catch { throw new Error(messages.network); }
+  } catch { throw new ShareFailure(messages.network); }
   finally { clearTimeout(timeout); }
   if (response.status === 429 || (response.status === 403 && (response.headers.get('x-ratelimit-remaining') === '0' || response.headers.has('retry-after')))) {
-    throw new Error(messages.rate);
+    throw new ShareFailure(messages.rate);
   }
-  if ([401, 403, 404, 422].includes(response.status)) throw new Error(messages.token);
-  if (!response.ok) throw new Error(messages.network);
+  if ([401, 403, 404, 422].includes(response.status)) throw new ShareFailure(messages.token);
+  if (!response.ok) throw new ShareFailure(messages.network);
   // Accept only fields that can form a viewer fragment, never an echoed message or token.
   if (!isObject(value) || value.public !== false || !isObject(value.owner) || typeof value.owner.login !== 'string'
     || !/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(value.owner.login)
@@ -82,7 +84,7 @@ export async function uploadShare(share: ShareDocument, settings: ShareSettings,
       } catch { /* Best effort; preserve the original sanitized error. */ }
       finally { clearTimeout(timeout); }
     }
-    throw new Error(messages.network);
+    throw new ShareFailure(messages.network);
   }
   viewer.hash = `${value.owner.login}/${value.id}`;
   return { url: viewer.href };
@@ -97,9 +99,9 @@ export async function shareSession(settings: ShareSettings, source: () => Promis
     share = toShare(session, snapshot, entries);
   } catch (error) {
     if (error instanceof ShareError && error.code === 'oversized') {
-      throw new Error(`会话过大：${error.bytes!.toLocaleString('zh-CN')} 字节；上限为 10,000,000 字节。`);
+      throw new ShareFailure(`会话过大：${error.bytes!.toLocaleString('zh-CN')} 字节；上限为 10,000,000 字节。`);
     }
-    throw new Error(messages.snapshot);
+    throw new ShareFailure(messages.snapshot);
   }
   return uploadShare(share, settings, dependencies);
 }

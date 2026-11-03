@@ -1,10 +1,10 @@
 # Chat-Share
 
-A Paseo plugin that uploads one complete agent snapshot to a secret GitHub Gist and returns a browser viewer link. The agreed specification is [docs/requirements.md](docs/requirements.md). The viewer has not been deployed; its URL starts empty.
+A Paseo plugin that uploads one complete agent snapshot to a secret GitHub Gist and returns a browser viewer link. The agreed specification is [docs/requirements.md](docs/requirements.md). The default viewer is [chat-share.pages.dev](https://chat-share.pages.dev).
 
 ## Install and configure
 
-Requires Paseo 0.14.0 (including 0.14.0 prereleases), Node/npm on the daemon, and a separately hosted production viewer.
+Requires Paseo 0.14.0 (including 0.14.0 prereleases), Node/npm and GitHub CLI (`gh`) on the daemon. Run `gh auth login` there before sharing, with permission to create Gists.
 
 ```sh
 paseo plugin install github:<owner>/<repo>
@@ -12,11 +12,9 @@ paseo plugin install github:<owner>/<repo>
 paseo plugin install /absolute/path/to/Chat-Share
 ```
 
-Open **Settings → Plugins → Chat-Share → 会话分享**, enter **查看器 URL**, and save. Sharing fails before uploading while this is empty. The server first uses `gh auth token`, then **备用 GitHub token** when gh cannot supply one.
+The server uses `gh auth token` for authentication. To use a custom viewer, open **Settings → Plugins → Chat-Share → 会话分享**, enter **查看器 URL**, and save. Leaving or clearing it uses the production default.
 
-Prefer `gh`; if a fallback token is needed, limit it to the `gist` scope. It is stored in plaintext, and clients with daemon management permission can read it.
-
-Use **分享** in any workspace header (or **··· → 分享会话** in compact layouts). The popover lists non-archived agents, newest first. Clicking an agent uploads immediately. The link is copied and stays visible with **复制链接**, including when clipboard access fails. Delete the Gist on GitHub to revoke a link; cached raw content can remain readable for about five minutes.
+Use **分享** in any workspace header (or **··· → 分享会话** in compact layouts). The popover lists non-archived agents, newest first. Clicking an agent uploads immediately, with no confirmation. The link is copied and stays visible with **复制链接**, including when clipboard access fails. Delete the Gist on GitHub to revoke a link; cached raw content can remain readable for about five minutes.
 
 ## Run
 
@@ -28,7 +26,7 @@ npm run build
 npm run preview
 ```
 
-The preview listens only on `127.0.0.1:4173` and applies the built `_headers`, including CSP. The production site is `viewer/dist/`; publish only that directory in a later milestone.
+The preview listens only on `127.0.0.1:4173` and applies the built `_headers`, including CSP. The production site builds to `viewer/dist/`.
 
 ```text
 http://127.0.0.1:4173/?preview=design#local-preview/00000000000000000000000000000001
@@ -81,7 +79,9 @@ The repository root contains `paseo-plugin.json`, `index.client.tsx` and `index.
 
 For GitHub installs and updates, Paseo runs the manifest's `npm ci --omit=dev --ignore-scripts` in a managed candidate checkout before validating and activating it. Local-path installs and reloads use that directory directly and do not run manifest preparation; run the full development install yourself. The host supplies `@getpaseo/plugin`, `zod`, React/React Native and React Query. The parser/diff libraries are production dependencies; SDK/type/test tooling stays in devDependencies.
 
-Header registrations follow an owned workspace directory subscription, including workspaces opened later and reconnects. Workspace and agent directories use 200-entry cursor pages, buffering updates until the snapshot is complete. The server runs `readSnapshot` → `toShare` → Gist upload. Credentials and GitHub requests stay on the server; the sharing RPC returns only the viewer URL. If a successful create response is unusable but supplies a valid Gist ID, the server attempts deletion before returning a sanitized error. A broken connection or an unreadable response without an ID cannot guarantee cleanup, and POSTs are never automatically retried.
+Header registrations follow an owned workspace directory subscription, including workspaces opened later and reconnects. Workspace and agent directories use 200-entry cursor pages, buffering updates until the snapshot is complete. The server runs `readSnapshot` → `toShare` → Gist upload. Credentials and GitHub requests stay on the server; the sharing RPC returns the viewer URL or a short error, never credentials. If a successful create response is unusable but supplies a valid Gist ID, the server attempts deletion before returning a sanitized error. A broken connection or an unreadable response without an ID cannot guarantee cleanup, and POSTs are never automatically retried.
+
+Settings version 2 removes obsolete credential fields through the SDK's persisted migration when the updated plugin starts. Sharing failures return short typed errors; unexpected transport failures display a generic message.
 
 ## Dependencies
 
@@ -91,3 +91,7 @@ Header registrations follow an owned workspace directory subscription, including
 - `diff`: line diffs for old/new edits. Edit-distance work is bounded; an unusually large unrelated edit displays a complete whole-file replacement.
 
 Vite, TypeScript, Vitest/jsdom, Playwright, and tsx are development tools. Geist is a self-hosted font build asset, with no external font or stylesheet requests.
+
+## License
+
+[MIT](LICENSE), Copyright (c) 2026 mailwmj.

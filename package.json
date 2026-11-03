@@ -1,6 +1,7 @@
 {
   "name": "chat-share",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite --config viewer/vite.config.ts --host 127.0.0.1",

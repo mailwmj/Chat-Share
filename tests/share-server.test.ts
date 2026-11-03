@@ -9,7 +9,7 @@ import type { PluginServerContext } from '@getpaseo/plugin/server';
 
 const token = 'synthetic-TOKEN-secret-DO-NOT-RETURN';
 const id = 'a'.repeat(32);
-const settings = { viewerUrl: 'https://viewer.example/base/', fallbackToken: 'synthetic-fallback' };
+const settings = { viewerUrl: 'https://viewer.example/base/' };
 const ok = () => new Response(JSON.stringify({ id, public: false, owner: { login: 'response-owner' } }), { status: 201 });
 const timeline = () => ({ ...snapshot, entries: [entry({ type: 'assistant_message', text: 'synthetic full output' })],
   reset: false, gap: false, staleCursor: false, hasOlder: false, hasNewer: false, startCursor: { epoch: snapshot.epoch, seq: 1 }, error: null });
@@ -32,9 +32,15 @@ describe('private, complete Gist upload', () => {
     expect(JSON.stringify(result)).not.toContain(token);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
-  it.each(['', 'ftp://viewer.example', 'https://user:pass@viewer.example', 'https://viewer.example/#bad', 'https://viewer.example/?token=x'])('fails before snapshot/credentials/network for an unconfigured or invalid viewer (%s)', async viewerUrl => {
+  it.each(['', undefined, '  '])('uses the production viewer for an empty or missing setting (%s)', async viewerUrl => {
+    const fetch = vi.fn().mockResolvedValue(ok());
+    await expect(shareSession({ viewerUrl }, source, { fetch, readGh: async () => token }))
+      .resolves.toEqual({ url: `https://chat-share.pages.dev/#response-owner/${id}` });
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  it.each(['ftp://viewer.example', 'https://user:pass@viewer.example', 'https://viewer.example/#bad', 'https://viewer.example/?token=x'])('fails before snapshot/credentials/network for an invalid viewer (%s)', async viewerUrl => {
     const fetch = vi.fn(), readGh = vi.fn(), getSource = vi.fn(source);
-    await expect(shareSession({ ...settings, viewerUrl }, getSource, { fetch, readGh })).rejects.toThrow('未配置查看器');
+    await expect(shareSession({ ...settings, viewerUrl }, getSource, { fetch, readGh })).rejects.toThrow('查看器地址无效');
     expect(getSource).not.toHaveBeenCalled(); expect(readGh).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
   });
   it('reports UTF-8 byte size and sends no request for oversized snapshots', async () => {
@@ -87,21 +93,31 @@ describe('private, complete Gist upload', () => {
   });
 });
 
-describe('server credential order', () => {
+describe('gh-only server credentials', () => {
   it('invokes gh directly with no shell', async () => {
     expect(await ghToken()).toBe(token);
     expect(execFile).toHaveBeenLastCalledWith('gh', ['auth', 'token'], expect.objectContaining({ encoding: 'utf8' }), expect.any(Function));
     expect(vi.mocked(execFile).mock.calls.at(-1)![2]).not.toHaveProperty('shell');
   });
-  it('prefers gh over a configured fallback', async () => {
-    expect(await resolveToken('fallback', async () => ` ${token}\n`)).toBe(token);
+  it('uses the trimmed gh token', async () => {
+    expect(await resolveToken(async () => ` ${token}\n`)).toBe(token);
   });
-  it.each(['empty', 'failure'])('uses the fallback when gh returns %s', async kind => {
-    expect(await resolveToken(' fallback ', async () => { if (kind === 'failure') throw new Error(token); return ''; })).toBe('fallback');
-  });
-  it('reports how to log in when neither source supplies a token', async () => {
+  it.each(['empty', 'failure'])('does not upload when gh returns %s', async kind => {
     const fetch = vi.fn();
-    await expect(uploadShare(maliciousShare(), { ...settings, fallbackToken: '' }, { fetch, readGh: async () => '' })).rejects.toThrow('gh auth login');
+    const readGh = async () => { if (kind === 'failure') throw new Error(token); return ''; };
+    await expect(uploadShare(maliciousShare(), settings, { fetch, readGh }))
+      .rejects.toThrow('请在服务器安装 GitHub CLI（gh），并运行 gh auth login 登录。');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each(['missing', 'not logged in'])('does not upload or expose subprocess output when gh is %s', async kind => {
+    vi.mocked(execFile).mockImplementationOnce((...args) => {
+      const callback = args.at(-1) as (error: Error, stdout: string) => void;
+      callback(Object.assign(new Error(token), { code: kind === 'missing' ? 'ENOENT' : 1 }), token);
+      return {} as ReturnType<typeof execFile>;
+    });
+    const fetch = vi.fn();
+    await expect(uploadShare(maliciousShare(), settings, { fetch }))
+      .rejects.toThrow(/^请在服务器安装 GitHub CLI（gh），并运行 gh auth login 登录。$/);
     expect(fetch).not.toHaveBeenCalled();
   });
 });
@@ -110,7 +126,7 @@ describe('plugin RPC wiring', () => {
   it('registers persisted settings and reads the selected daemon agent through the complete snapshot pipeline', async () => {
     const registerSettings = vi.fn().mockReturnValue({ read: async () => ({ status: 'ready', values: settings }) });
     const handle = vi.fn(); contribute({ registerSettings, handle } as unknown as PluginServerContext);
-    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok());
+    const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => ok());
     const data = { ...session, archivedAt: null };
     const refresh = vi.fn().mockResolvedValue({ agent: data }), refetch = vi.fn().mockResolvedValue(timeline());
     const ref = vi.fn().mockReturnValue({ refresh, timeline: { refetch } });
@@ -119,10 +135,22 @@ describe('plugin RPC wiring', () => {
     expect(ref).toHaveBeenCalledExactlyOnceWith('chosen'); expect(refresh).toHaveBeenCalledOnce();
     expect(refetch).toHaveBeenCalledExactlyOnceWith({ direction: 'tail', limit: 0, projection: 'projected' });
     expect(fetch).toHaveBeenCalledOnce(); fetch.mockClear(); ref.mockClear();
-    // A missing URL must fail before the RPC even looks up the agent.
+    // Clearing a saved URL restores production without a separate save migration.
     registerSettings.mock.results[0]!.value.read = async () => ({ status: 'ready', values: { ...settings, viewerUrl: '' } });
-    await expect(handle.mock.calls[0]![1]({ agentId: 'chosen' }, { paseo: { agents: { ref } } })).rejects.toThrow('未配置查看器');
-    expect(registerSettings).toHaveBeenCalledOnce(); expect(ref).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+    await expect(handle.mock.calls[0]![1]({ agentId: 'chosen' }, { paseo: { agents: { ref } } }))
+      .resolves.toEqual({ url: `https://chat-share.pages.dev/#response-owner/${id}` });
+    expect(registerSettings).toHaveBeenCalledOnce(); expect(ref).toHaveBeenCalledExactlyOnceWith('chosen'); expect(fetch).toHaveBeenCalledOnce();
     fetch.mockRestore();
+  });
+  it('returns short typed failures, including unknown errors without leaking their text', async () => {
+    const read = vi.fn().mockResolvedValue({ status: 'ready', values: { viewerUrl: 'ftp://invalid' } });
+    const handle = vi.fn();
+    contribute({ registerSettings: () => ({ read }), handle } as unknown as PluginServerContext);
+    expect(read).toHaveBeenCalledOnce();
+    const handler = handle.mock.calls[0]![1], ref = vi.fn();
+    await expect(handler({ agentId: 'chosen' }, { paseo: { agents: { ref } } })).resolves.toEqual({ error: '查看器地址无效，请在插件设置中修改。' });
+    expect(ref).not.toHaveBeenCalled();
+    read.mockRejectedValueOnce(new Error(token));
+    await expect(handler({ agentId: 'chosen' }, {})).resolves.toEqual({ error: '分享失败，请稍后重试。' });
   });
 });

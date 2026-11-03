@@ -26,7 +26,10 @@ export function createSharePopover() {
     }
     const upload = useMutation({
       mutationFn: (agentId: string) => {
-        const pending = rpc({ agentId });
+        const pending = rpc({ agentId }).catch(() => { throw new Error('分享失败，请稍后重试。'); }).then(result => {
+          if ('error' in result) throw new Error(result.error);
+          return result;
+        });
         inFlight = pending;
         const clear = () => { if (inFlight === pending) inFlight = undefined; };
         void pending.then(clear, clear);

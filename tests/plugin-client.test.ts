@@ -95,6 +95,27 @@ describe('complete directory observation', () => {
 });
 
 describe('share popover', () => {
+  it.each(['typed failure', 'wrapped transport failure'])('shows only a short message for a %s', async kind => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const dir = directory(); host.list.mockResolvedValue(dir);
+    const short = '请在服务器安装 GitHub CLI（gh），并运行 gh auth login 登录。';
+    const wrapped = 'Request failed: 未配置查看器地址。请先在插件设置填写查看器 URL。 requestType=plugin.rpc.invoke.request code=handler_error';
+    if (kind === 'typed failure') host.rpc.mockResolvedValueOnce({ error: short });
+    else host.rpc.mockRejectedValueOnce(new Error(wrapped));
+    const expected = kind === 'typed failure' ? short : '分享失败，请稍后重试。';
+    const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
+    const Content = createSharePopover();
+    await act(async () => root!.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Content,
+      { workspaceId: 'current', theme: { colors: {} } } as PluginButtonContentProps))));
+    await act(async () => dir.snapshot({ entries: [{ agent: { id: 'synthetic', title: 'Synthetic', provider: 'codex', workspaceId: 'current' } }] }));
+    await act(async () => { node.querySelector('button')!.click(); await new Promise(done => setTimeout(done, 10)); });
+    expect(host.toast.error).toHaveBeenCalledExactlyOnceWith(expected);
+    expect(node.textContent).toContain(expected);
+    expect(node.textContent).not.toContain('Request failed:');
+    expect(node.textContent).not.toContain('requestType=');
+    expect(node.textContent).not.toContain('code=handler_error');
+    expect(host.copy).not.toHaveBeenCalled();
+  });
   it('one click uploads, a second click during upload creates nothing, and clipboard failure retains a copyable link', async () => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     const dir = directory(); host.list.mockResolvedValue(dir);
