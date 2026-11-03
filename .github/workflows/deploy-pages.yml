@@ -1,0 +1,44 @@
+name: Deploy Viewer to Cloudflare Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'viewer/**'
+      - 'shared/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run typecheck & tests
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Build viewer
+        run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || 'f072a1a16946c5f0ceefb5111404f4da' }}
+          command: pages deploy viewer/dist --project-name chat-share --branch main

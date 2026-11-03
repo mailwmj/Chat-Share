@@ -11,13 +11,13 @@ Chat-Share 包含两个独立运行但共享逻辑的子系统：
 | 子系统 | 涵盖目录 | 运行环境 | 生效与部署方式 |
 | :--- | :--- | :--- | :--- |
 | **Paseo 插件端** | `client/`, `server/`, `index.client.tsx`, `index.server.ts`, `paseo-plugin.json` | 运行于本地 Paseo Daemon 与桌面/Web 客户端 | 通过 `git push` 发布，或在本地通过 `paseo plugin reload` / `paseo plugin install` 生效。 |
-| **会话查看器前端** | `viewer/`, `shared/` | 托管在 **Cloudflare Pages** 上的纯静态单页应用（生产域名：`https://chat-share.pages.dev`） | **无 GitHub 自动部署 Webhook**。只要修改了前端代码，仅 `git push` 到 GitHub 是**不会生效**的，必须执行 Wrangler 部署命令。 |
+| **会话查看器前端** | `viewer/`, `shared/` | 托管在 **Cloudflare Pages** 上的纯静态单页应用（生产域名：`https://chat-share.pages.dev`） | **已配置 GitHub Actions 自动部署**（`.github/workflows/deploy-pages.yml`）。当推送到 `main` 时自动运行测试并部署；也可随时使用 Wrangler 命令行手动部署。 |
 
 ---
 
-## 2. 哪些改动必须重新部署到 Cloudflare Pages？
+## 2. 哪些改动会触发/需要重新部署到 Cloudflare Pages？
 
-凡是涉及查看器页面视觉、交互、渲染与解析逻辑的改动，均必须重新部署到 Cloudflare Pages：
+凡是涉及查看器页面视觉、交互、渲染与解析逻辑的改动，均需部署到 Cloudflare Pages：
 
 1. **`viewer/` 目录下的任何修改**：
    - `viewer/src/render.ts`（时间线渲染、折叠/展开、图标切换等）；
@@ -35,30 +35,37 @@ Chat-Share 包含两个独立运行但共享逻辑的子系统：
 
 ---
 
-## 3. 查看器部署流程与标准命令
+## 3. 部署方式
 
-完成代码修改后，务必遵循以下步骤进行验证、编译和部署：
+### 方式 A：GitHub Actions 自动部署（主要通道）
+项目已配置 `.github/workflows/deploy-pages.yml`：
+- 当 `main` 分支接收到包含 `viewer/`、`shared/` 或 `package.json` 的修改时，会自动执行测试、构建并发布至 Cloudflare Pages。
+- **必要环境密钥**：需在 GitHub 仓库的 `Settings → Secrets and variables → Actions` 中配置：
+  - `CLOUDFLARE_API_TOKEN`：具备 Pages 部署权限的 Cloudflare API Token；
+  - `CLOUDFLARE_ACCOUNT_ID`（可选，已有预设 fallback `f072a1a16946c5f0ceefb5111404f4da`）。
 
-### 步骤 1：质量检查与单元测试
+### 方式 B：本地 Wrangler 手动部署（应急与本地调试）
+若需要在本地快速发布或排查问题，可按以下命令手动操作：
+
+#### 步骤 1：质量检查与单元测试
 ```bash
 npm run typecheck
 npm test
 ```
 
-### 步骤 2：编译生产包
-构建产物将输出至 `viewer/dist/`：
+#### 步骤 2：编译生产包
+构建产物输出至 `viewer/dist/`：
 ```bash
 npm run build
 ```
 
-### 步骤 3：部署到 Cloudflare Pages
-通过 Wrangler 将构建产物部署到生产环境（绑定 `chat-share` 项目与 `main` 分支）：
+#### 步骤 3：部署到 Cloudflare Pages
 ```bash
 npx --yes wrangler pages deploy viewer/dist --project-name chat-share --branch main
 ```
 
-### 步骤 4：线上验证
-部署完成后，可以通过 curl 验证生产环境是否已加载最新编译哈希的 JS/CSS 资源：
+#### 步骤 4：线上验证
+部署完成后，验证生产环境是否已加载最新编译哈希的 JS/CSS 资源：
 ```bash
 curl -s https://chat-share.pages.dev | grep -o 'assets/index-[^"]*'
 ```
