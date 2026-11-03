@@ -1,0 +1,7 @@
+{
+  "id": "chat-share",
+  "name": "Chat-Share",
+  "description": "分享一个会话，让同事在浏览器中查看和下载。",
+  "requirements": { "paseo": ">=0.14.0" },
+  "build": [["npm", "ci", "--omit=dev", "--ignore-scripts"]]
+}

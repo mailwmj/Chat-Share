@@ -1,0 +1,7 @@
+node_modules/
+viewer/dist/
+.local/
+.taste-skill/
+test-results/
+playwright-report/
+*.tsbuildinfo
