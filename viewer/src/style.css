@@ -180,68 +180,61 @@ h1 {
 
 /* Timeline Rows & Disclosures */
 .timeline-row {
-  margin: 3px 0;
+  margin: 2px 0;
   min-width: 0;
 }
-.timeline-row.merged-row {
-  margin: 6px 0;
-}
 .timeline-row > summary {
-  min-height: 38px;
+  min-height: 28px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   color: var(--muted);
   cursor: pointer;
-  padding: 6px 8px;
-  margin: 0 -8px;
-  border-radius: 6px;
+  padding: 3px 0;
   list-style: none;
   font-size: 13px;
   scroll-margin-top: 88px;
-  transition: background 120ms ease, color 120ms ease;
+  background: transparent;
+  transition: color 120ms ease;
 }
 .timeline-row > summary::-webkit-details-marker { display: none; }
 .timeline-row > summary:hover {
   color: var(--ink);
-  background: var(--hover);
+  background: transparent;
 }
 .timeline-row[open] > summary {
   color: var(--ink);
-}
-.timeline-row.merged-row > summary {
-  font-weight: 500;
-  color: var(--ink);
-}
-
-.chevron-slot {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  margin-left: auto;
-  color: var(--muted);
-  opacity: 0.6;
-  flex-shrink: 0;
-  transition: transform 140ms ease, opacity 140ms ease;
-}
-.timeline-row > summary:hover .chevron-slot,
-.timeline-row[open] > summary .chevron-slot {
-  opacity: 1;
-}
-.timeline-row[open] > summary > .chevron-slot {
-  transform: rotate(90deg);
 }
 
 .row-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   color: var(--muted);
+  position: relative;
+}
+.row-icon .icon-kind {
+  display: block;
+}
+.row-icon .icon-expand {
+  display: none;
+  transition: transform 140ms ease;
+}
+.timeline-row > summary:hover .row-icon .icon-kind {
+  display: none;
+}
+.timeline-row > summary:hover .row-icon .icon-expand {
+  display: block;
+}
+.timeline-row[open] > summary .row-icon .icon-kind {
+  display: none;
+}
+.timeline-row[open] > summary .row-icon .icon-expand {
+  display: block;
+  transform: rotate(90deg);
 }
 .timeline-row > summary:hover .row-icon,
 .timeline-row[open] > summary .row-icon {
@@ -291,33 +284,12 @@ h1 {
 .positive { color: var(--positive); }
 .negative { color: var(--negative); }
 
-/* Nested steps inside merged row */
-.merged-steps {
-  border-left: 1px solid var(--line);
-  margin: 4px 0 10px 8px;
-  padding: 4px 0 6px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.merged-steps .timeline-row.step-row > summary {
-  min-height: 34px;
-  padding: 4px 6px;
-  margin: 0 -6px;
-  font-size: 12.5px;
-}
-
 /* Detail bodies */
 .disclosure-body {
-  padding: 6px 0 14px 20px;
+  padding: 6px 0 14px 18px;
   border-left: 1px solid var(--line);
   margin: 2px 0 10px 8px;
   min-width: 0;
-}
-.merged-steps .disclosure-body {
-  border-left: none;
-  margin: 2px 0 8px 0;
-  padding: 4px 0 8px 18px;
 }
 
 /* Shell panel */
@@ -629,10 +601,8 @@ pre code {
     margin-bottom: 20px;
   }
   .markdown { font-size: 14px; line-height: 1.65; }
-  .timeline-row > summary { min-height: 38px; font-size: 12px; gap: 8px; padding: 6px 6px; margin: 0 -6px; }
-  .merged-steps { margin-left: 6px; padding-left: 8px; }
-  .disclosure-body { padding-left: 12px; margin-left: 6px; }
-  .merged-steps .disclosure-body { margin-left: 0; padding-left: 10px; }
+  .timeline-row > summary { min-height: 32px; font-size: 12.5px; gap: 8px; padding: 4px 0; }
+  .disclosure-body { padding-left: 14px; margin-left: 8px; }
   .truncation { max-width: 100px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
   pre { padding: 10px; }
   .state { padding: 40px 16px; }

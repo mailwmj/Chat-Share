@@ -190,3 +190,35 @@ test('benchmark: expand-all and collapse-all settle efficiently', async ({ page 
   expect(expandDuration).toBeLessThan(5000);
   expect(collapseDuration).toBeLessThan(2000);
 });
+
+test('hover swaps left icon to expand chevron without row background, and clicking toggles open', async ({ page }) => {
+  await page.goto(`/?preview=design${fragment}`);
+  const firstStep = page.locator('details.timeline-row.step-row').first();
+  const summary = firstStep.locator('summary.row-summary');
+  const kindIcon = firstStep.locator('.row-icon .icon-kind');
+  const expandIcon = firstStep.locator('.row-icon .icon-expand');
+
+  // Initially: closed, not hovered
+  await expect(kindIcon).toBeVisible();
+  await expect(expandIcon).toBeHidden();
+  expect(await firstStep.getAttribute('open')).toBeNull();
+
+  // Hover over the summary
+  await summary.hover();
+  await expect(kindIcon).toBeHidden();
+  await expect(expandIcon).toBeVisible();
+
+  // Summary background on hover must remain transparent (no gray hover highlight bar)
+  const bg = await summary.evaluate(el => window.getComputedStyle(el).backgroundColor);
+  expect(bg).toBe('rgba(0, 0, 0, 0)');
+
+  // Click summary anywhere to expand
+  await summary.click();
+  expect(await firstStep.getAttribute('open')).not.toBeNull();
+  await expect(expandIcon).toBeVisible();
+  await expect(firstStep.locator('.disclosure-body')).toBeVisible();
+
+  // Click again to collapse
+  await summary.click();
+  expect(await firstStep.getAttribute('open')).toBeNull();
+});
