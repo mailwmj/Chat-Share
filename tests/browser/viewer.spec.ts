@@ -245,3 +245,67 @@ test('hover swaps left icon to expand chevron without row background, and clicki
   await summary.click();
   expect(await mergedRow.getAttribute('open')).toBeNull();
 });
+
+test('reader preferences: theme, font-size, width, and chat-only filter toggle correctly', async ({ page }) => {
+  await page.goto(`/?preview=design${fragment}`);
+  await expect(page.locator('.timeline')).toBeVisible();
+
+  // 1. Direct Theme Toggle
+  const themeToggle = page.locator('.theme-toggle-btn');
+  await expect(themeToggle).toBeVisible();
+  await themeToggle.click();
+  const theme = await page.evaluate(() => document.documentElement.dataset.theme);
+  expect(['light', 'dark']).toContain(theme);
+
+  // 2. Open Reader Settings Popover
+  const readerBtn = page.locator('.reader-btn');
+  await readerBtn.click();
+  const popover = page.locator('.reader-popover');
+  await expect(popover).toBeVisible();
+
+  // Test Font Size toggle to 'lg' (Comfortable)
+  const lgBtn = popover.getByRole('button', { name: 'Comfortable', exact: true });
+  await lgBtn.click();
+  expect(await page.evaluate(() => document.documentElement.dataset.fontSize)).toBe('lg');
+
+  // Test Width toggle to 'wide' (Wide)
+  const wideBtn = popover.getByRole('button', { name: 'Wide', exact: true });
+  await wideBtn.click();
+  expect(await page.evaluate(() => document.documentElement.dataset.contentWidth)).toBe('wide');
+
+  // Test Filter toggle to 'Chat only'
+  const chatOnlyBtn = popover.getByRole('button', { name: 'Chat only', exact: true });
+  await chatOnlyBtn.click();
+  expect(await page.evaluate(() => document.documentElement.dataset.viewFilter)).toBe('chat_only');
+
+  // Verify non-message timeline rows are hidden when chat_only is active
+  const hiddenRows = await page.locator('.timeline-row').evaluateAll(rows => rows.every(r => window.getComputedStyle(r).display === 'none'));
+  expect(hiddenRows).toBe(true);
+
+  // Close Popover with Escape
+  await page.keyboard.press('Escape');
+  await expect(popover).toBeHidden();
+});
+
+test('table of contents drawer opens, navigates to question, and closes', async ({ page }) => {
+  await page.goto(`/?preview=design${fragment}`);
+  await expect(page.locator('.timeline')).toBeVisible();
+
+  const tocBtn = page.locator('.toc-btn');
+  await expect(tocBtn).toBeVisible();
+  await tocBtn.click();
+
+  const drawer = page.locator('.toc-drawer');
+  await expect(drawer).toBeVisible();
+
+  const items = drawer.locator('.toc-item');
+  expect(await items.count()).toBeGreaterThan(0);
+
+  // Click first question
+  await items.first().click();
+  await expect(drawer).toBeHidden();
+
+  // Target message receives highlight pulse
+  const firstUserMsg = page.locator('.message.user').first();
+  await expect(firstUserMsg).toHaveClass(/highlight-target/);
+});

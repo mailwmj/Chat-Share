@@ -1,8 +1,8 @@
 import './style.css';
-import { ShareError, type ShareDocument } from '../../shared/format';
+import { ShareError, type ShareDocument, type TimelineEntry } from '../../shared/format';
 import { downloadMarkdown } from '../../shared/download';
-import { browserLocale, messages } from './i18n';
-import { element, renderTimeline } from './render';
+import { browserLocale, messages, questionsCountText } from './i18n';
+import { element, renderTimeline, createIcon } from './render';
 import { loadShare } from './load';
 
 const locale = browserLocale(navigator.languages), t = messages[locale];
@@ -10,14 +10,349 @@ document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 let loading: AbortController | undefined;
 
+type Theme = 'auto' | 'light' | 'dark';
+type FontSize = 'sm' | 'md' | 'lg' | 'xl';
+type ContentWidth = 'normal' | 'wide' | 'full';
+type ViewFilter = 'all' | 'chat_only';
+
+const PREFS = {
+  theme: 'chat-share-theme',
+  fontSize: 'chat-share-font-size',
+  width: 'chat-share-width',
+  filter: 'chat-share-filter',
+};
+
+function getPref<T extends string>(key: string, fallback: T): T {
+  try { return (localStorage.getItem(key) as T) || fallback; }
+  catch { return fallback; }
+}
+
+function setPref(key: string, val: string): void {
+  try { localStorage.setItem(key, val); }
+  catch { /* private mode */ }
+}
+
+function applyTheme(theme: Theme): void {
+  if (theme === 'auto') {
+    delete document.documentElement.dataset.theme;
+  } else {
+    document.documentElement.dataset.theme = theme;
+  }
+  setPref(PREFS.theme, theme);
+}
+
+function applyFontSize(size: FontSize): void {
+  document.documentElement.dataset.fontSize = size;
+  setPref(PREFS.fontSize, size);
+}
+
+function applyWidth(width: ContentWidth): void {
+  document.documentElement.dataset.contentWidth = width;
+  setPref(PREFS.width, width);
+}
+
+function applyFilter(filter: ViewFilter): void {
+  document.documentElement.dataset.viewFilter = filter;
+  setPref(PREFS.filter, filter);
+}
+
+// Initialize user preferences on page load
+applyTheme(getPref(PREFS.theme, 'auto'));
+applyFontSize(getPref(PREFS.fontSize, 'md'));
+applyWidth(getPref(PREFS.width, 'normal'));
+applyFilter(getPref(PREFS.filter, 'all'));
+
+function isDark(): boolean {
+  const explicit = document.documentElement.dataset.theme;
+  if (explicit === 'dark') return true;
+  if (explicit === 'light') return false;
+  return typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)').matches : false;
+}
+
 export function showShare(share: ShareDocument): void {
   const title = share.session.title || t.untitled;
   document.title = `${title} · Chat-Share`;
   const header = element('header', 'toolbar'), inner = element('div', 'toolbar-inner');
-  const heading = element('h1', '', title), actions = element('nav', 'actions');
+  const titleGroup = element('div', 'toolbar-title-group');
+  const heading = element('h1', '', title);
   heading.title = title;
-  const download = element('button', 'button', t.download), expand = element('button', 'button', t.expand);
-  download.type = expand.type = 'button';
+  const actions = element('nav', 'actions');
+
+  // Extract user entries for TOC
+  const userEntries: { entry: TimelineEntry; index: number; text: string }[] = [];
+  share.entries.forEach((e, idx) => {
+    if (e.item.type === 'user_message') {
+      const text = typeof e.item.text === 'string' ? e.item.text : '';
+      userEntries.push({ entry: e, index: idx, text });
+    }
+  });
+
+  // Table of Contents Drawer
+  let tocBtn: HTMLButtonElement | undefined;
+  let tocBackdrop: HTMLElement | undefined;
+  let tocDrawer: HTMLElement | undefined;
+
+  if (userEntries.length > 0) {
+    tocBtn = element('button', 'button icon-btn toc-btn');
+    tocBtn.type = 'button';
+    tocBtn.setAttribute('aria-label', t.tableOfContents);
+    tocBtn.title = t.tableOfContents;
+    const tocSr = element('span', 'sr-only', t.tableOfContents);
+    tocBtn.append(createIcon('toc', 16), tocSr);
+
+    tocBackdrop = element('div', 'toc-backdrop');
+    tocBackdrop.hidden = true;
+    tocDrawer = element('aside', 'toc-drawer');
+    tocDrawer.hidden = true;
+    tocDrawer.setAttribute('role', 'dialog');
+    tocDrawer.setAttribute('aria-label', t.tableOfContents);
+
+    const tocHeader = element('div', 'toc-header');
+    const tocHeaderLeft = element('div', 'toc-header-left');
+    const tocTitle = element('span', 'toc-title', t.tableOfContents);
+    const tocCount = element('span', 'toc-count', questionsCountText(userEntries.length, locale));
+    tocHeaderLeft.append(tocTitle, tocCount);
+
+    const tocClose = element('button', 'toc-close');
+    tocClose.type = 'button';
+    tocClose.setAttribute('aria-label', t.close);
+    tocClose.append(createIcon('close', 14));
+    tocHeader.append(tocHeaderLeft, tocClose);
+
+    const tocList = element('div', 'toc-list');
+    tocList.setAttribute('role', 'list');
+
+    userEntries.forEach((item, i) => {
+      const tocItem = element('button', 'toc-item');
+      tocItem.type = 'button';
+      tocItem.setAttribute('role', 'listitem');
+      const badge = element('span', 'toc-badge', `Q${i + 1}`);
+      const cleanSnippet = item.text.replace(/^[#\s*`>_~-]+/gm, '').trim().slice(0, 50) || t.untitled;
+      const textSpan = element('span', 'toc-snippet', cleanSnippet);
+      tocItem.append(badge, textSpan);
+
+      tocItem.addEventListener('click', () => {
+        closeToc();
+        const target = document.getElementById(`entry-${item.index}`);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          target.classList.remove('highlight-target');
+          void target.offsetWidth;
+          target.classList.add('highlight-target');
+          setTimeout(() => target.classList.remove('highlight-target'), 2000);
+        }
+      });
+      tocList.append(tocItem);
+    });
+
+    tocDrawer.append(tocHeader, tocList);
+
+    const openToc = () => { tocBackdrop!.hidden = false; tocDrawer!.hidden = false; };
+    const closeToc = () => { tocBackdrop!.hidden = true; tocDrawer!.hidden = true; };
+    tocBtn.addEventListener('click', openToc);
+    tocClose.addEventListener('click', closeToc);
+    tocBackdrop.addEventListener('click', closeToc);
+  }
+
+  // 1. Expand / Collapse All Button
+  const expand = element('button', 'button icon-btn', '');
+  expand.type = 'button';
+  expand.setAttribute('aria-label', t.expand);
+  expand.title = t.expand;
+  const expandIconSlot = element('span', 'btn-icon');
+  expandIconSlot.append(createIcon('expand', 16));
+  const expandSr = element('span', 'sr-only', t.expand);
+  expand.append(expandIconSlot, expandSr);
+
+  // 2. Direct Theme Switcher Button
+  const themeToggle = element('button', 'button icon-btn theme-toggle-btn');
+  themeToggle.type = 'button';
+  const themeIconSlot = element('span', 'btn-icon');
+  const themeSr = element('span', 'sr-only', t.toggleTheme);
+  themeToggle.append(themeIconSlot, themeSr);
+
+  function updateThemeUi(): void {
+    const dark = isDark();
+    themeIconSlot.replaceChildren(createIcon(dark ? 'sun' : 'moon', 16));
+    const tip = dark ? t.themeLight : t.themeDark;
+    themeToggle.title = tip;
+    themeToggle.setAttribute('aria-label', tip);
+    themeSr.textContent = tip;
+  }
+  updateThemeUi();
+
+  // 3. Reading Preferences Popover (Aa)
+  const readerBtn = element('button', 'button icon-btn reader-btn');
+  readerBtn.type = 'button';
+  readerBtn.setAttribute('aria-label', t.readingSettings);
+  readerBtn.title = t.readingSettings;
+  const readerSr = element('span', 'sr-only', t.readingSettings);
+  readerBtn.append(createIcon('typography', 16), readerSr);
+
+  const popover = element('div', 'reader-popover');
+  popover.hidden = true;
+  popover.setAttribute('role', 'dialog');
+  popover.setAttribute('aria-label', t.readingSettings);
+
+  const popHeader = element('div', 'popover-header');
+  const popTitle = element('span', 'popover-title', t.readingSettings);
+  const popClose = element('button', 'popover-close');
+  popClose.type = 'button';
+  popClose.setAttribute('aria-label', t.close);
+  popClose.append(createIcon('close', 12));
+  popHeader.append(popTitle, popClose);
+
+  // Font size section
+  const fsSection = element('div', 'popover-section');
+  fsSection.append(element('span', 'popover-label', t.fontSize));
+  const fsCtrl = element('div', 'segmented-control');
+  const fsOptions: { size: FontSize; label: string }[] = [
+    { size: 'sm', label: t.fontSizeSm },
+    { size: 'md', label: t.fontSizeMd },
+    { size: 'lg', label: t.fontSizeLg },
+    { size: 'xl', label: t.fontSizeXl },
+  ];
+  const fsButtons: HTMLButtonElement[] = [];
+  for (const opt of fsOptions) {
+    const b = element('button', 'segment-btn', opt.label);
+    b.type = 'button';
+    b.addEventListener('click', () => {
+      applyFontSize(opt.size);
+      updatePopoverActive();
+    });
+    fsCtrl.append(b);
+    fsButtons.push(b);
+  }
+  fsSection.append(fsCtrl);
+
+  // Width section
+  const widthSection = element('div', 'popover-section');
+  widthSection.append(element('span', 'popover-label', t.contentWidth));
+  const widthCtrl = element('div', 'segmented-control');
+  const widthOptions: { width: ContentWidth; label: string }[] = [
+    { width: 'normal', label: t.widthNormal },
+    { width: 'wide', label: t.widthWide },
+    { width: 'full', label: t.widthFull },
+  ];
+  const widthButtons: HTMLButtonElement[] = [];
+  for (const opt of widthOptions) {
+    const b = element('button', 'segment-btn', opt.label);
+    b.type = 'button';
+    b.addEventListener('click', () => {
+      applyWidth(opt.width);
+      updatePopoverActive();
+    });
+    widthCtrl.append(b);
+    widthButtons.push(b);
+  }
+  widthSection.append(widthCtrl);
+
+  // Appearance section
+  const themeSection = element('div', 'popover-section');
+  themeSection.append(element('span', 'popover-label', t.theme));
+  const themeCtrl = element('div', 'segmented-control');
+  const themeOptions: { theme: Theme; label: string }[] = [
+    { theme: 'light', label: t.themeLight },
+    { theme: 'auto', label: t.themeAuto },
+    { theme: 'dark', label: t.themeDark },
+  ];
+  const themeButtons: HTMLButtonElement[] = [];
+  for (const opt of themeOptions) {
+    const b = element('button', 'segment-btn', opt.label);
+    b.type = 'button';
+    b.addEventListener('click', () => {
+      applyTheme(opt.theme);
+      updateThemeUi();
+      updatePopoverActive();
+    });
+    themeCtrl.append(b);
+    themeButtons.push(b);
+  }
+  themeSection.append(themeCtrl);
+
+  // View filter section
+  const filterSection = element('div', 'popover-section');
+  filterSection.append(element('span', 'popover-label', t.viewMode));
+  const filterCtrl = element('div', 'segmented-control');
+  const filterOptions: { filter: ViewFilter; label: string }[] = [
+    { filter: 'all', label: t.viewModeAll },
+    { filter: 'chat_only', label: t.viewModeChatOnly },
+  ];
+  const filterButtons: HTMLButtonElement[] = [];
+  for (const opt of filterOptions) {
+    const b = element('button', 'segment-btn', opt.label);
+    b.type = 'button';
+    b.addEventListener('click', () => {
+      applyFilter(opt.filter);
+      updatePopoverActive();
+    });
+    filterCtrl.append(b);
+    filterButtons.push(b);
+  }
+  filterSection.append(filterCtrl);
+
+  popover.append(popHeader, fsSection, widthSection, themeSection, filterSection);
+
+  function updatePopoverActive(): void {
+    const currentTheme = getPref(PREFS.theme, 'auto');
+    const currentFs = getPref(PREFS.fontSize, 'md');
+    const currentWidth = getPref(PREFS.width, 'normal');
+    const currentFilter = getPref(PREFS.filter, 'all');
+
+    fsOptions.forEach((opt, idx) => {
+      fsButtons[idx]!.classList.toggle('active', currentFs === opt.size);
+    });
+    widthOptions.forEach((opt, idx) => {
+      widthButtons[idx]!.classList.toggle('active', currentWidth === opt.width);
+    });
+    themeOptions.forEach((opt, idx) => {
+      themeButtons[idx]!.classList.toggle('active', currentTheme === opt.theme);
+    });
+    filterOptions.forEach((opt, idx) => {
+      filterButtons[idx]!.classList.toggle('active', currentFilter === opt.filter);
+    });
+  }
+  updatePopoverActive();
+
+  themeToggle.addEventListener('click', () => {
+    const next: Theme = isDark() ? 'light' : 'dark';
+    applyTheme(next);
+    updateThemeUi();
+    updatePopoverActive();
+  });
+
+  readerBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    popover.hidden = !popover.hidden;
+  });
+  popClose.addEventListener('click', () => { popover.hidden = true; });
+
+  document.addEventListener('click', (e) => {
+    if (!popover.hidden && !popover.contains(e.target as Node) && !readerBtn.contains(e.target as Node)) {
+      popover.hidden = true;
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      popover.hidden = true;
+      if (tocBackdrop && tocDrawer) {
+        tocBackdrop.hidden = true;
+        tocDrawer.hidden = true;
+      }
+    }
+  });
+
+  // 4. Download Button
+  const download = element('button', 'button icon-btn', '');
+  download.type = 'button';
+  download.setAttribute('aria-label', t.download);
+  download.title = t.download;
+  const downloadIconSlot = element('span', 'btn-icon');
+  downloadIconSlot.append(createIcon('download', 16));
+  const downloadSr = element('span', 'sr-only', t.download);
+  download.append(downloadIconSlot, downloadSr);
+
+  // Render Timeline
   const timeline = renderTimeline(share, t);
   const allRows = [...timeline.querySelectorAll<HTMLDetailsElement>('details.timeline-row')];
   const allClampedMsgs = [...timeline.querySelectorAll<HTMLElement>('.message.user.has-clamp')];
@@ -27,8 +362,12 @@ export function showShare(share: ShareDocument): void {
     const allRowsOpen = allRows.length === 0 || allRows.every(r => r.open);
     const allMsgsOpen = allClampedMsgs.length === 0 || allClampedMsgs.every(m => !m.classList.contains('clamped'));
     const allOpen = allRowsOpen && allMsgsOpen && (allRows.length > 0 || allClampedMsgs.length > 0);
-    expand.textContent = allOpen ? t.collapse : t.expand;
+    const label = allOpen ? t.collapse : t.expand;
     expand.setAttribute('aria-expanded', String(allOpen));
+    expand.setAttribute('aria-label', label);
+    expand.title = label;
+    expandSr.textContent = label;
+    expandIconSlot.replaceChildren(createIcon(allOpen ? 'collapse' : 'expand', 16));
   }
 
   function scheduleUpdate(): void {
@@ -87,6 +426,7 @@ export function showShare(share: ShareDocument): void {
     }
     updateButtonState();
   });
+
   download.addEventListener('click', () => {
     const url = URL.createObjectURL(new Blob([downloadMarkdown(share, locale)], { type: 'text/markdown;charset=utf-8' }));
     const link = element('a');
@@ -94,9 +434,45 @@ export function showShare(share: ShareDocument): void {
     link.download = `${title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').slice(0, 100) || 'conversation'}.md`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadIconSlot.replaceChildren(createIcon('check', 16));
+    setTimeout(() => downloadIconSlot.replaceChildren(createIcon('download', 16)), 1500);
   });
-  actions.append(download, expand); inner.append(heading, actions); header.append(inner);
-  app.replaceChildren(header, timeline);
+
+  // Floating Back to Top button
+  const backToTop = element('button', 'back-to-top');
+  backToTop.type = 'button';
+  backToTop.setAttribute('aria-label', t.backToTop);
+  backToTop.title = t.backToTop;
+  backToTop.append(createIcon('arrow_up', 18), element('span', 'sr-only', t.backToTop));
+  backToTop.addEventListener('click', () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  let scrollTicking = false;
+  window.addEventListener('scroll', () => {
+    if (!scrollTicking) {
+      requestAnimationFrame(() => {
+        if (window.scrollY > 300) {
+          backToTop.classList.add('visible');
+        } else {
+          backToTop.classList.remove('visible');
+        }
+        scrollTicking = false;
+      });
+      scrollTicking = true;
+    }
+  }, { passive: true });
+
+  actions.append(expand, themeToggle, readerBtn, download);
+  if (tocBtn) titleGroup.append(tocBtn);
+  titleGroup.append(heading);
+  inner.append(titleGroup, actions, popover);
+  header.append(inner);
+
+  app.replaceChildren(header, timeline, backToTop);
+  if (tocBackdrop && tocDrawer) {
+    app.append(tocBackdrop, tocDrawer);
+  }
 }
 
 function showState(message: string, retry = false): void {

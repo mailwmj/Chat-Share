@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { editLines, renderTimeline, toolSummary, stepSummary } from '../viewer/src/render';
+import { editLines, renderTimeline, toolSummary, stepSummary, createIcon } from '../viewer/src/render';
 import { markdownRenderer, safeLink } from '../viewer/src/markdown';
 import { rawUrl, loadShare } from '../viewer/src/load';
-import { messages, browserLocale } from '../viewer/src/i18n';
+import { messages, browserLocale, questionsCountText } from '../viewer/src/i18n';
 import { MAX_SHARE_BYTES } from '../shared/format';
 import { toShare } from '../shared/convert';
 import { maliciousShare, designShare, session, snapshot, entry, attack } from './fixtures';
@@ -539,5 +539,33 @@ describe('user message clamping and detail panels', () => {
     expect(exitEl2).toBeNull();
 
     document.body.replaceChildren();
+  });
+
+  it('provides icons and translations for reader controls and question counters', () => {
+    expect(questionsCountText(1, 'en')).toBe('1 question');
+    expect(questionsCountText(3, 'en')).toBe('3 questions');
+    expect(questionsCountText(1, 'zh')).toBe('共 1 轮问答');
+    expect(questionsCountText(5, 'zh')).toBe('共 5 轮问答');
+
+    for (const icon of ['download', 'expand', 'collapse', 'sun', 'moon', 'theme_auto', 'typography', 'toc', 'arrow_up', 'close', 'link']) {
+      const el = createIcon(icon);
+      expect(el.tagName.toLowerCase()).toBe('svg');
+      expect(el.classList.contains(`icon-${icon}`)).toBe(true);
+    }
+  });
+
+  it('renders copy button in message footer with clipboard action', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
+    const share = toShare(session, snapshot, [entry({ type: 'user_message', text: 'Hello world' })]);
+    const node = renderTimeline(share, messages.en);
+    document.body.append(node);
+
+    const msg = node.querySelector('.message.user')!;
+    const copyBtn = msg.querySelector<HTMLButtonElement>('.copy-msg-btn')!;
+    expect(copyBtn).not.toBeNull();
+    copyBtn.click();
+    expect(writeText).toHaveBeenCalledWith('Hello world');
   });
 });

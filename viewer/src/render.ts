@@ -167,6 +167,62 @@ export function createIcon(name: string, size = 16): SVGElement {
       add('polyline', { points: '3 8 6 11 13 4' });
       add('rect', { x: '2', y: '2', width: '12', height: '12', rx: '2' });
       break;
+    case 'download':
+      add('path', { d: 'M3 11v2a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-2' });
+      add('polyline', { points: '5 7.5 8 10.5 11 7.5' });
+      add('line', { x1: '8', y1: '2.5', x2: '8', y2: '10.5' });
+      break;
+    case 'expand':
+      add('polyline', { points: '4 6 8 2 12 6' });
+      add('polyline', { points: '4 10 8 14 12 10' });
+      break;
+    case 'collapse':
+      add('polyline', { points: '4 3 8 7 12 3' });
+      add('polyline', { points: '4 13 8 9 12 13' });
+      break;
+    case 'sun':
+      add('circle', { cx: '8', cy: '8', r: '3' });
+      add('line', { x1: '8', y1: '1.5', x2: '8', y2: '3' });
+      add('line', { x1: '8', y1: '13', x2: '8', y2: '14.5' });
+      add('line', { x1: '1.5', y1: '8', x2: '3', y2: '8' });
+      add('line', { x1: '13', y1: '8', x2: '14.5', y2: '8' });
+      add('line', { x1: '3.4', y1: '3.4', x2: '4.5', y2: '4.5' });
+      add('line', { x1: '11.5', y1: '11.5', x2: '12.6', y2: '12.6' });
+      add('line', { x1: '3.4', y1: '12.6', x2: '4.5', y2: '11.5' });
+      add('line', { x1: '11.5', y1: '4.5', x2: '12.6', y2: '3.4' });
+      break;
+    case 'moon':
+      add('path', { d: 'M13.2 9.5a5.5 5.5 0 1 1-6.7-6.7 5 5 0 0 0 6.7 6.7z' });
+      break;
+    case 'theme_auto':
+      add('rect', { x: '2', y: '3', width: '12', height: '8.5', rx: '1.5' });
+      add('line', { x1: '8', y1: '11.5', x2: '8', y2: '14' });
+      add('line', { x1: '5', y1: '14', x2: '11', y2: '14' });
+      break;
+    case 'typography':
+      add('path', { d: 'M2 13.5L5.5 4h1L10 13.5M3.2 10.2h5.6' });
+      add('path', { d: 'M10.8 13.5l1.8-4.8h.8l1.8 4.8M11.5 11.8h3' });
+      break;
+    case 'toc':
+      add('line', { x1: '2.5', y1: '4', x2: '4.5', y2: '4' });
+      add('line', { x1: '6.5', y1: '4', x2: '13.5', y2: '4' });
+      add('line', { x1: '2.5', y1: '8', x2: '4.5', y2: '8' });
+      add('line', { x1: '6.5', y1: '8', x2: '13.5', y2: '8' });
+      add('line', { x1: '2.5', y1: '12', x2: '4.5', y2: '12' });
+      add('line', { x1: '6.5', y1: '12', x2: '13.5', y2: '12' });
+      break;
+    case 'arrow_up':
+      add('polyline', { points: '4 7 8 3 12 7' });
+      add('line', { x1: '8', y1: '3', x2: '8', y2: '13' });
+      break;
+    case 'close':
+      add('line', { x1: '3.5', y1: '3.5', x2: '12.5', y2: '12.5' });
+      add('line', { x1: '12.5', y1: '3.5', x2: '3.5', y2: '12.5' });
+      break;
+    case 'link':
+      add('path', { d: 'M6.5 9.5a3 3 0 0 0 4.24 0l2-2a3 3 0 0 0-4.24-4.24l-1 1' });
+      add('path', { d: 'M9.5 6.5a3 3 0 0 0-4.24 0l-2 2a3 3 0 0 0 4.24 4.24l1-1' });
+      break;
     default:
       add('rect', { x: '3', y: '3', width: '10', height: '10', rx: '2' });
       add('circle', { cx: '8', cy: '8', r: '1.5' });
@@ -518,9 +574,31 @@ export function renderTimeline(share: ShareDocument, t: Translations): HTMLEleme
     const item = entry.item;
 
     if (item.type === 'user_message' || item.type === 'assistant_message') {
-      const article = element('article', `message ${item.type === 'user_message' ? 'user' : 'assistant'}`);
-      article.setAttribute('aria-label', item.type === 'user_message' ? t.you : t.assistant);
-      if (item.type === 'user_message') {
+      const isUser = item.type === 'user_message';
+      const article = element('article', `message ${isUser ? 'user' : 'assistant'}`);
+      article.id = `entry-${index}`;
+      article.setAttribute('data-entry-index', String(index));
+      article.setAttribute('aria-label', isUser ? t.you : t.assistant);
+
+      const msgFooter = element('div', 'message-footer');
+      const copyBtn = element('button', 'copy-msg-btn');
+      copyBtn.type = 'button';
+      copyBtn.setAttribute('aria-label', t.copyMessage);
+      copyBtn.title = t.copyMessage;
+      copyBtn.append(createIcon('copy', 13));
+      copyBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(string(item.text));
+          copyBtn.replaceChildren(createIcon('check', 13));
+          setTimeout(() => copyBtn.replaceChildren(createIcon('copy', 13)), 1500);
+        } catch {
+          // ignore
+        }
+      });
+      msgFooter.append(copyBtn);
+
+      if (isUser) {
         const text = string(item.text);
         const proseNode = prose(text);
         const lineCount = text.trim().split(/\r?\n/).length;
@@ -536,12 +614,12 @@ export function renderTimeline(share: ShareDocument, t: Translations): HTMLEleme
             const clamped = article.classList.toggle('clamped');
             showFullBtn.textContent = clamped ? t.showFull : t.showLess;
           });
-          article.append(clampWrapper, showFullBtn, ...marks(index));
+          article.append(clampWrapper, showFullBtn, msgFooter, ...marks(index));
         } else {
-          article.append(proseNode, ...marks(index));
+          article.append(proseNode, msgFooter, ...marks(index));
         }
       } else {
-        article.append(prose(string(item.text)), ...marks(index));
+        article.append(prose(string(item.text)), msgFooter, ...marks(index));
       }
       timeline.append(article);
       index++;

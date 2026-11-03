@@ -14,7 +14,7 @@ paseo plugin install /absolute/path/to/Chat-Share
 
 The server uses `gh auth token` for authentication. To use a custom viewer, open **Settings → Plugins → Chat-Share → 会话分享**, enter **查看器 URL**, and save. Leaving or clearing it uses the production default.
 
-Use **分享** in any workspace header (or **··· → 分享会话** in compact layouts). The popover lists non-archived agents, newest first. Clicking an agent uploads immediately, with no confirmation. The link is copied and stays visible with **复制链接**, including when clipboard access fails. Delete the Gist on GitHub to revoke a link; cached raw content can remain readable for about five minutes.
+Use **分享** in any workspace header (or **··· → 分享会话** in compact layouts). The popover lists non-archived agents, newest first, with their provider marks and a separate action on each row. **分享** creates and copies a snapshot link. While the conversation matches that snapshot, the action becomes **复制链接**. New content or a history reset replaces it with **重新分享** and hides the old copy action. Regeneration creates a new snapshot; existing links keep their original content. If copying fails, the current link is shown for manual selection. Delete the Gist on GitHub to revoke a link; cached raw content can remain readable for about five minutes.
 
 ## Run
 
@@ -79,7 +79,9 @@ The repository root contains `paseo-plugin.json`, `index.client.tsx` and `index.
 
 For GitHub installs and updates, Paseo runs the manifest's `npm ci --omit=dev --ignore-scripts` in a managed candidate checkout before validating and activating it. Local-path installs and reloads use that directory directly and do not run manifest preparation; run the full development install yourself. The host supplies `@getpaseo/plugin`, `zod`, React/React Native and React Query. The parser/diff libraries are production dependencies; SDK/type/test tooling stays in devDependencies.
 
-Header registrations follow an owned workspace directory subscription, including workspaces opened later and reconnects. Workspace and agent directories use 200-entry cursor pages, buffering updates until the snapshot is complete. The server runs `readSnapshot` → `toShare` → Gist upload. Credentials and GitHub requests stay on the server; the sharing RPC returns the viewer URL or a short error, never credentials. If a successful create response is unusable but supplies a valid Gist ID, the server attempts deletion before returning a sanitized error. A broken connection or an unreadable response without an ID cannot guarantee cleanup, and POSTs are never automatically retried.
+Header registrations follow an owned workspace directory subscription, including workspaces opened later and reconnects. Workspace and agent directories use 200-entry cursor pages, buffering updates until the snapshot is complete. The server runs `readSnapshot` → `toShare` → Gist upload. Gist descriptions record the agent ID and snapshot epoch/sequence so the latest link can be restored after reload. The panel checks the current timeline and observes new entries; renaming a conversation does not make its content stale. Uploads continue across panel closes, and each conversation has its own pending state. Older Gists without version metadata remain readable through their existing URLs; create a new share to enable version tracking.
+
+Credentials and GitHub requests stay on the server; sharing RPCs return viewer links, snapshot versions or short errors, never credentials. If a successful create response is unusable but supplies a valid Gist ID, the server attempts deletion before returning a sanitized error. A broken connection or an unreadable response without an ID cannot guarantee cleanup, and POSTs are never automatically retried.
 
 Settings version 2 removes obsolete credential fields through the SDK's persisted migration when the updated plugin starts. Sharing failures return short typed errors; unexpected transport failures display a generic message.
 

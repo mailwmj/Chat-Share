@@ -1,7 +1,7 @@
 import type { PluginServerContext } from '@getpaseo/plugin/server';
-import { preferences, shareAgent } from './shared/plugin';
+import { listShares, preferences, shareAgent } from './shared/plugin';
 import type { Refetch } from './shared/snapshot';
-import { ShareFailure, shareSession } from './server/share';
+import { listShareLinks, ShareFailure, shareSession } from './server/share';
 
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(preferences);
@@ -23,6 +23,15 @@ export default function contribute(server: PluginServerContext) {
       });
     } catch (error) {
       return { error: error instanceof ShareFailure ? error.message : '分享失败，请稍后重试。' };
+    }
+  });
+  server.handle(listShares, async () => {
+    try {
+      const current = await settings.read();
+      if (current.status !== 'ready') throw new ShareFailure('插件设置无效。请打开插件设置并重新保存。');
+      return { links: await listShareLinks(current.values) };
+    } catch (error) {
+      return { error: error instanceof ShareFailure ? error.message : '读取分享链接失败，请稍后重试。' };
     }
   });
   return () => {};

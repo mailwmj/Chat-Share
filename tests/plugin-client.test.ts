@@ -1,16 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PluginButtonContentProps, PluginClientContext } from '@getpaseo/plugin/client';
 import { registerHeaders } from '../client/header';
 import { createSharePopover } from '../client/share-popover';
 import { observeDirectory } from '../client/directory';
 
-const host = vi.hoisted(() => ({ rpc: vi.fn(), list: vi.fn(), copy: vi.fn(), toast: { show: vi.fn(), error: vi.fn() } }));
+const host = vi.hoisted(() => ({ rpc: vi.fn(), lookup: vi.fn(), timeline: vi.fn(), list: vi.fn(), copy: vi.fn(), toast: { show: vi.fn(), error: vi.fn() } }));
 vi.mock('@getpaseo/plugin/client', () => {
-  const api = { agents: { list: host.list } };
-  return { usePaseo: () => api, useRpc: () => host.rpc };
+  const api = { agents: { list: host.list, ref: (id: string) => ({ timeline: host.timeline(id) }) } };
+  return { usePaseo: () => api, useRpc: (contract: { name: string }) => contract.name === 'list-shares' ? host.lookup : host.rpc };
 });
 vi.mock('@getpaseo/plugin/client/ui', async () => {
   const { createElement } = await import('react');
@@ -21,7 +20,7 @@ vi.mock('@getpaseo/plugin/client/ui', async () => {
 });
 vi.mock('react-native', async () => {
   const { createElement } = await import('react');
-  const View = ({ children }: { children?: unknown }) => createElement('div', null, children as never);
+  const View = ({ children, accessibilityLabel }: { children?: unknown; accessibilityLabel?: string }) => createElement('div', { 'aria-label': accessibilityLabel }, children as never);
   const finish = () => ({ start: (done?: () => void) => done?.(), stop: () => {} });
   return {
     View,
@@ -30,8 +29,8 @@ vi.mock('react-native', async () => {
       createElement('button', { onClick: onPress, disabled, 'aria-label': accessibilityLabel, 'aria-selected': accessibilityState?.selected }, children as never),
     ActivityIndicator: () => null,
     AccessibilityInfo: { isReduceMotionEnabled: async () => false, addEventListener: () => ({ remove: () => {} }) },
-    Animated: { View, Value: class { setValue() {} }, timing: finish },
-    Easing: { bezier: () => (t: number) => t, out: (f: unknown) => f, back: () => (t: number) => t },
+    Animated: { View, Value: class { setValue() {} interpolate() { return this; } }, timing: finish, loop: finish },
+    Easing: { linear: (t: number) => t, bezier: () => (t: number) => t, out: (f: unknown) => f, back: () => (t: number) => t },
     Platform: { OS: 'web' },
   };
 });
@@ -49,7 +48,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 let root: Root | undefined;
-afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.replaceChildren(); vi.clearAllMocks(); });
+afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.replaceChildren(); vi.resetAllMocks(); });
 
 describe('header registration follows the workspace directory', () => {
   it('registers existing and later workspaces, removes archived ones, reconciles reconnects, and releases on cleanup', async () => {
@@ -107,102 +106,168 @@ describe('complete directory observation', () => {
   });
 });
 
+const version = { epoch: 'timeline-1', maxSeq: 10 };
+const shared = (id = 'a', maxSeq = 10) => ({ url: `https://viewer.example/#synthetic/${id.repeat(32)}`, version: { ...version, maxSeq } });
+const agent = (id = 'a', title = 'First', updatedAt = '2026-11-03T10:00:00Z') => ({ id, title, provider: 'codex', workspaceId: 'current', updatedAt });
+
+function timeline(maxSeq = 10, epoch = version.epoch) {
+  let listener: (event: unknown) => void;
+  const stop = Object.assign(vi.fn(), { ready: Promise.resolve() });
+  return {
+    refetch: vi.fn().mockResolvedValue({ epoch, window: { maxSeq }, error: null, gap: false, reset: false, staleCursor: false }),
+    subscribe: vi.fn((next: typeof listener) => { listener = next; return stop; }),
+    emit: (seq: number, currentEpoch = epoch) => listener({ event: { type: 'timeline' }, seq, epoch: currentEpoch }),
+    notify: (type: string) => listener({ event: { type } }),
+    stop,
+  };
+}
+async function mountPopover(entries: Array<ReturnType<typeof agent> & { archivedAt?: string }> = [agent()], Content = createSharePopover()) {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const dir = directory(); host.list.mockResolvedValue(dir);
+  if (!host.lookup.getMockImplementation()) host.lookup.mockResolvedValue({ links: {} });
+  if (!host.timeline.getMockImplementation()) host.timeline.mockReturnValue(timeline());
+  const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
+  await act(async () => root!.render(createElement(Content,
+    { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps)));
+  await act(async () => dir.snapshot({ entries: entries.map(agent => ({ agent })) }));
+  const button = (label: string) => node.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+  const click = async (label: string) => { await act(async () => button(label).click()); };
+  return { node, dir, button, click };
+}
+
 describe('share popover', () => {
   it.each(['typed failure', 'wrapped transport failure'])('shows only a short message for a %s', async kind => {
-    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-    const dir = directory(); host.list.mockResolvedValue(dir);
     const short = '请在服务器安装 GitHub CLI（gh），并运行 gh auth login 登录。';
-    const wrapped = 'Request failed: 未配置查看器地址。请先在插件设置填写查看器 URL。 requestType=plugin.rpc.invoke.request code=handler_error';
     if (kind === 'typed failure') host.rpc.mockResolvedValueOnce({ error: short });
-    else host.rpc.mockRejectedValueOnce(new Error(wrapped));
+    else host.rpc.mockRejectedValueOnce(new Error('Request failed: token requestType=plugin.rpc.invoke.request code=handler_error'));
     const expected = kind === 'typed failure' ? short : '分享失败，请稍后重试。';
-    const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
-    const Content = createSharePopover();
-    await act(async () => root!.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Content,
-      { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps))));
-    await act(async () => dir.snapshot({ entries: [{ agent: { id: 'synthetic', title: 'Synthetic', provider: 'codex', workspaceId: 'current' } }] }));
-    await act(async () => { node.querySelector('button')!.click(); await new Promise(done => setTimeout(done, 10)); });
+    const { node, click } = await mountPopover();
+    await click('分享 First');
     expect(host.toast.error).toHaveBeenCalledExactlyOnceWith(expected);
     expect(node.textContent).toContain(expected);
-    expect(node.textContent).not.toContain('Request failed:');
     expect(node.textContent).not.toContain('requestType=');
-    expect(node.textContent).not.toContain('code=handler_error');
     expect(host.copy).not.toHaveBeenCalled();
   });
-  it('one click uploads, a second click during upload creates nothing, and clipboard failure retains a copyable link', async () => {
-    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-    const dir = directory(); host.list.mockResolvedValue(dir);
-    const pending = deferred<{ url: string }>(); host.rpc.mockReturnValue(pending.promise);
+  it('shares each row independently, prevents duplicate uploads, and preserves a selectable link when copying fails', async () => {
+    const first = deferred<ReturnType<typeof shared>>(), second = deferred<ReturnType<typeof shared>>();
+    host.rpc.mockImplementation(({ agentId }) => agentId === 'a' ? first.promise : second.promise);
     host.copy.mockRejectedValue(new Error('clipboard denied'));
-    const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
-    const Content = createSharePopover();
-    const props = { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps;
-    await act(async () => root!.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }) }, createElement(Content, props))));
-    await act(async () => dir.snapshot({ entries: [
-      { agent: { id: 'chosen', title: 'Synthetic agent', provider: 'codex', workspaceId: 'current', updatedAt: '2026-11-03T10:00:00Z' } },
-      { agent: { id: 'elsewhere', title: 'Other workspace', provider: 'claude', workspaceId: 'other' } },
-      { agent: { id: 'archived', title: 'Archived', provider: 'claude', workspaceId: 'current', archivedAt: 'yesterday' } },
-    ] }));
-    expect(node.textContent).toContain('Synthetic agent'); expect(node.textContent).toContain('codex');
-    expect(node.textContent).not.toContain('Other workspace'); expect(node.textContent).not.toContain('Archived');
-    const button = node.querySelector('button')!;
-    await act(async () => { button.click(); button.click(); await new Promise(done => setTimeout(done, 10)); });
-    expect(host.rpc).toHaveBeenCalledExactlyOnceWith({ agentId: 'chosen' });
-    expect(node.textContent).toContain('正在分享');
-    const url = `https://viewer.example/#synthetic/${'a'.repeat(32)}`;
-    await act(async () => { pending.resolve({ url }); await new Promise(done => setTimeout(done, 10)); });
-    expect(host.copy).toHaveBeenCalledExactlyOnceWith(url); expect(host.toast.error).toHaveBeenCalledWith('复制失败，请复制下方链接。');
-    expect(node.textContent).toContain(url); expect(node.textContent).toContain('复制链接');
+    const { node, button, click } = await mountPopover([agent(), agent('b', 'Second'), { ...agent('x', 'Elsewhere'), workspaceId: 'other' }, { ...agent('z', 'Archived'), archivedAt: 'yesterday' }]);
+    expect(node.textContent).not.toContain('Elsewhere'); expect(node.textContent).not.toContain('Archived');
+    expect(node.querySelector('[aria-label="codex"]')).not.toBeNull();
+    await act(async () => { button('分享 First').click(); button('分享 First').click(); });
+    expect(button('正在创建 First 的分享链接').disabled).toBe(true);
+    expect(button('分享 Second').disabled).toBe(false);
+    await click('分享 Second');
+    expect(host.rpc.mock.calls).toEqual([[{ agentId: 'a' }], [{ agentId: 'b' }]]);
+    await act(async () => first.resolve(shared()));
+    expect(host.copy).toHaveBeenCalledExactlyOnceWith(shared().url);
+    expect(node.textContent).toContain(shared().url);
+    expect(button('复制 First 的链接').disabled).toBe(false);
     host.copy.mockResolvedValue(undefined);
-    await act(async () => (Array.from(node.querySelectorAll('button')).find(button => button.textContent === '复制链接')!).click());
+    await click('复制 First 的链接');
+    expect(host.rpc).toHaveBeenCalledTimes(2);
     expect(host.toast.show).toHaveBeenCalledWith('链接已复制', { variant: 'success' });
-    expect(host.rpc).toHaveBeenCalledOnce();
-    await act(async () => root!.unmount()); root = undefined; expect(dir.release).toHaveBeenCalledOnce();
+    await act(async () => new Promise(done => setTimeout(done, 180)));
+    expect(node.textContent).not.toContain(shared().url);
+    await act(async () => second.resolve(shared('b')));
   });
   it('orders agents newest first in both the snapshot and live updates', async () => {
-    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-    const dir = directory(); host.list.mockResolvedValue(dir);
-    const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
-    const Content = createSharePopover();
-    await act(async () => root!.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Content,
-      { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps))));
-    const older = { id: 'old', title: 'Older', provider: 'claude', workspaceId: 'current', updatedAt: '2026-11-03T08:00:00Z' };
-    const newer = { id: 'new', title: 'Newer', provider: 'codex', workspaceId: 'current', updatedAt: '2026-11-03T09:00:00Z' };
+    const { node, dir } = await mountPopover([agent('old', 'Older', '2026-11-03T08:00:00Z'), agent('new', 'Newer', '2026-11-03T09:00:00Z')]);
     const titles = () => Array.from(node.querySelectorAll('button')).map(button => button.getAttribute('aria-label'));
-    await act(async () => dir.snapshot({ entries: [{ agent: older }, { agent: newer }] }));
     expect(titles()).toEqual(['分享 Newer', '分享 Older']);
-    await act(async () => dir.update({ type: 'agent_update', payload: { kind: 'upsert', agent: { ...older, updatedAt: '2026-11-03T10:00:00Z' } } }));
+    await act(async () => dir.update({ type: 'agent_update', payload: { kind: 'upsert', agent: agent('old', 'Older', '2026-11-03T10:00:00Z') } }));
     expect(titles()).toEqual(['分享 Older', '分享 Newer']);
   });
-  it('marks the shared session while sharing and after, enables copying only once a link exists, and expands the link only when copying fails', async () => {
-    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-    const dir = directory(); host.list.mockResolvedValue(dir);
-    const pending = deferred<{ url: string }>(); host.rpc.mockReturnValue(pending.promise);
+  it('copies an existing snapshot, ignores title changes, and replaces copying with regeneration when content arrives', async () => {
+    const live = timeline(); host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
     host.copy.mockResolvedValue(undefined);
-    const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
-    const Content = createSharePopover();
-    await act(async () => root!.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Content,
-      { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps))));
-    await act(async () => dir.snapshot({ entries: [
-      { agent: { id: 'a', title: 'First', provider: 'claude', workspaceId: 'current', updatedAt: '2026-11-03T10:00:00Z' } },
-      { agent: { id: 'b', title: 'Second', provider: 'codex', workspaceId: 'current', updatedAt: '2026-11-03T09:00:00Z' } },
-    ] }));
-    const row = (label: string) => node.querySelector(`button[aria-label="分享 ${label}"]`)!;
-    const copyButton = () => Array.from(node.querySelectorAll('button')).find(button => button.textContent === '复制链接')!;
-    expect(row('First').getAttribute('aria-selected')).toBe('false');
-    await act(async () => { (row('Second') as HTMLButtonElement).click(); await new Promise(done => setTimeout(done, 10)); });
-    expect(row('Second').getAttribute('aria-selected')).toBe('true');
-    expect(row('First').getAttribute('aria-selected')).toBe('false');
-    expect(copyButton().disabled).toBe(true);
-    const url = `https://viewer.example/#synthetic/${'b'.repeat(32)}`;
-    await act(async () => { pending.resolve({ url }); await new Promise(done => setTimeout(done, 10)); });
-    expect(row('Second').getAttribute('aria-selected')).toBe('true');
-    expect(copyButton().disabled).toBe(false);
-    const linkText = () => Array.from(node.querySelectorAll('span')).find(span => span.textContent === url)!;
-    expect(linkText().getAttribute('data-lines')).toBe('1');
-    host.copy.mockRejectedValueOnce(new Error('denied'));
-    await act(async () => { copyButton().click(); await new Promise(done => setTimeout(done, 10)); });
-    expect(linkText().getAttribute('data-lines')).toBeNull();
+    const { node, dir, button, click } = await mountPopover();
+    await click('复制 First 的链接'); expect(host.rpc).not.toHaveBeenCalled();
+    await act(async () => dir.update({ type: 'agent_update', payload: { kind: 'upsert', agent: agent('a', 'Renamed', '2026-11-03T11:00:00Z') } }));
+    expect(button('复制 Renamed 的链接')).not.toBeNull();
+    await act(async () => live.emit(11));
+    expect(button('复制 Renamed 的链接')).toBeNull();
+    expect(button('重新生成 Renamed 的分享')).not.toBeNull();
+    host.rpc.mockResolvedValue(shared('b', 11));
+    live.refetch.mockResolvedValue({ epoch: version.epoch, window: { maxSeq: 11 } });
+    await click('重新生成 Renamed 的分享');
+    expect(host.rpc).toHaveBeenCalledExactlyOnceWith({ agentId: 'a' });
+    expect(button('复制 Renamed 的链接')).not.toBeNull();
+    expect(button('重新生成 Renamed 的分享')).toBeNull();
+  });
+  it.each(['new content', 'history reset'])('detects %s that arrived while closed and cleans up live subscriptions', async kind => {
+    const live = timeline(kind === 'new content' ? 11 : 10, kind === 'history reset' ? 'new-epoch' : version.epoch);
+    host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
+    const { button } = await mountPopover();
+    expect(button('重新生成 First 的分享')).not.toBeNull();
+    expect(button('复制 First 的链接')).toBeNull();
+    await act(async () => root!.unmount()); root = undefined;
+    expect(live.stop).toHaveBeenCalledOnce();
+  });
+  it('keeps regeneration visible when messages arrive during upload', async () => {
+    const live = timeline(12); host.timeline.mockReturnValue(live);
+    const upload = deferred<ReturnType<typeof shared>>(); host.rpc.mockReturnValue(upload.promise);
+    const { button, click } = await mountPopover(); await click('分享 First');
+    await act(async () => upload.resolve(shared('a', 11)));
+    expect(button('重新生成 First 的分享')).not.toBeNull();
+    expect(button('复制 First 的链接')).toBeNull();
+  });
+  it('does not let an in-flight history read overwrite a newer live event', async () => {
+    const live = timeline(), read = deferred<unknown>(); live.refetch.mockReturnValue(read.promise);
+    host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
+    const { button } = await mountPopover();
+    expect(button('正在检查 First 的分享状态').disabled).toBe(true);
+    await act(async () => { live.emit(11); read.resolve({ epoch: version.epoch, window: { maxSeq: 10 } }); });
+    expect(button('重新生成 First 的分享')).not.toBeNull();
+    expect(button('复制 First 的链接')).toBeNull();
+  });
+  it('checks missed content after reconnect and invalidates a replaced history immediately', async () => {
+    const live = timeline(); host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
+    const { button } = await mountPopover();
+    expect(button('复制 First 的链接')).not.toBeNull();
+    live.refetch.mockResolvedValue({ epoch: version.epoch, window: { maxSeq: 11 } });
+    await act(async () => live.notify('subscription_restored'));
+    expect(button('重新生成 First 的分享')).not.toBeNull();
+    await act(async () => live.notify('replacement'));
+    expect(button('复制 First 的链接')).toBeNull();
+  });
+  it('explains a failed freshness check instead of offering an unverified copy action', async () => {
+    const live = timeline(); live.refetch.mockRejectedValue(new Error('offline'));
+    host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
+    const { node, button } = await mountPopover();
+    expect(button('复制 First 的链接')).toBeNull();
+    expect(button('重新生成 First 的分享')).not.toBeNull();
+    expect(node.textContent).toContain('无法确认快照是否最新');
+  });
+  it('keeps an upload across closing and reopening without copying over the clipboard while closed', async () => {
+    const Content = createSharePopover(), upload = deferred<ReturnType<typeof shared>>(); host.rpc.mockReturnValue(upload.promise);
+    const first = await mountPopover([agent()], Content); await first.click('分享 First');
+    await act(async () => root!.unmount()); root = undefined;
+    const second = await mountPopover([agent()], Content);
+    expect(second.button('正在创建 First 的分享链接').disabled).toBe(true);
+    await act(async () => upload.resolve(shared()));
+    expect(second.button('复制 First 的链接')).not.toBeNull();
+    expect(host.copy).not.toHaveBeenCalled();
     expect(host.rpc).toHaveBeenCalledOnce();
+  });
+  it('blocks duplicate sharing until lookup completes and exposes a failed lookup with retry', async () => {
+    const lookup = deferred<{ error: string }>(); host.lookup.mockReturnValueOnce(lookup.promise);
+    const { node, button, click } = await mountPopover();
+    expect(button('正在检查 First 的分享状态').disabled).toBe(true);
+    await act(async () => lookup.resolve({ error: '读取分享链接失败，请稍后重试。' }));
+    expect(node.textContent).toContain('读取分享链接失败');
+    host.lookup.mockResolvedValue({ links: { a: shared() } });
+    await click('重试读取分享链接');
+    expect(button('复制 First 的链接')).not.toBeNull(); expect(host.rpc).not.toHaveBeenCalled();
+  });
+  it('does not offer a stale selectable URL after a clipboard failure and a new message', async () => {
+    const live = timeline(); host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
+    host.copy.mockRejectedValue(new Error('denied'));
+    const { node, click } = await mountPopover(); await click('复制 First 的链接');
+    expect(node.textContent).toContain(shared().url);
+    await act(async () => live.emit(11));
+    await act(async () => new Promise(done => setTimeout(done, 180)));
+    expect(node.textContent).not.toContain(shared().url);
   });
 });

@@ -18,8 +18,18 @@ export const preferences = defineSettings({
   migrate: values => values,
 });
 
+const shareVersion = z.object({ epoch: z.string().min(1), maxSeq: z.number().int().nonnegative() });
+const sharedSnapshot = z.object({ url: z.string().url(), version: shareVersion });
+export type SharedSnapshot = z.infer<typeof sharedSnapshot>;
+
 export const shareAgent = defineRpc({
   name: 'share-agent',
   input: z.object({ agentId: z.string().min(1) }),
-  output: z.union([z.object({ url: z.string().url() }), z.object({ error: z.string() })]),
+  output: z.union([sharedSnapshot, z.object({ error: z.string() })]),
+});
+
+export const listShares = defineRpc({
+  name: 'list-shares',
+  input: z.object({}),
+  output: z.union([z.object({ links: z.record(z.string(), sharedSnapshot) }), z.object({ error: z.string() })]),
 });

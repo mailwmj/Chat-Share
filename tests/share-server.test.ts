@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest';
-import { shareSession, uploadShare, resolveToken, ghToken } from '../server/share';
+import { shareSession, uploadShare, resolveToken, ghToken, listShareLinks } from '../server/share';
 import { execFile } from 'node:child_process';
 import contribute from '../index.server';
 import { MAX_SHARE_BYTES, SHARE_FILENAME } from '../shared/format';
@@ -20,12 +20,13 @@ describe('private, complete Gist upload', () => {
   it('uploads a complete snapshot as a secret Gist and builds the link from response owner.login', async () => {
     const fetch = vi.fn().mockResolvedValue(ok()), readGh = vi.fn().mockResolvedValue(token);
     const result = await shareSession(settings, source, { fetch, readGh });
-    expect(result).toEqual({ url: `https://viewer.example/base/#response-owner/${id}` });
+    expect(result).toEqual({ url: `https://viewer.example/base/#response-owner/${id}`, version: { epoch: snapshot.epoch, maxSeq: snapshot.window.maxSeq } });
     const [url, request] = fetch.mock.calls[0]!;
     expect(url).toBe('https://api.github.com/gists'); expect(request.method).toBe('POST');
     expect(request.headers.Authorization).toBe(`Bearer ${token}`);
     const body = JSON.parse(request.body);
     expect(body.public).toBe(false); expect(Object.keys(body.files)).toEqual([SHARE_FILENAME]);
+    expect(body.description).toBe(`Chat-Share snapshot ${session.id} ${encodeURIComponent(snapshot.epoch)} ${snapshot.window.maxSeq}`);
     expect(body.description).not.toContain(session.title); expect(body.description).not.toContain('synthetic full output');
     const content = JSON.parse(body.files[SHARE_FILENAME].content);
     expect(content.entries).toEqual(timeline().entries); expect(content.snapshot).toEqual(snapshot);
@@ -35,7 +36,7 @@ describe('private, complete Gist upload', () => {
   it.each(['', undefined, '  '])('uses the production viewer for an empty or missing setting (%s)', async viewerUrl => {
     const fetch = vi.fn().mockResolvedValue(ok());
     await expect(shareSession({ viewerUrl }, source, { fetch, readGh: async () => token }))
-      .resolves.toEqual({ url: `https://chat-share.pages.dev/#response-owner/${id}` });
+      .resolves.toEqual({ url: `https://chat-share.pages.dev/#response-owner/${id}`, version: { epoch: snapshot.epoch, maxSeq: snapshot.window.maxSeq } });
     expect(fetch).toHaveBeenCalledOnce();
   });
   it.each(['ftp://viewer.example', 'https://user:pass@viewer.example', 'https://viewer.example/#bad', 'https://viewer.example/?token=x'])('fails before snapshot/credentials/network for an invalid viewer (%s)', async viewerUrl => {
@@ -131,14 +132,14 @@ describe('plugin RPC wiring', () => {
     const refresh = vi.fn().mockResolvedValue({ agent: data }), refetch = vi.fn().mockResolvedValue(timeline());
     const ref = vi.fn().mockReturnValue({ refresh, timeline: { refetch } });
     const result = await handle.mock.calls[0]![1]({ agentId: 'chosen' }, { paseo: { agents: { ref } } });
-    expect(result).toEqual({ url: `https://viewer.example/base/#response-owner/${id}` });
+    expect(result).toEqual({ url: `https://viewer.example/base/#response-owner/${id}`, version: { epoch: snapshot.epoch, maxSeq: snapshot.window.maxSeq } });
     expect(ref).toHaveBeenCalledExactlyOnceWith('chosen'); expect(refresh).toHaveBeenCalledOnce();
     expect(refetch).toHaveBeenCalledExactlyOnceWith({ direction: 'tail', limit: 0, projection: 'projected' });
     expect(fetch).toHaveBeenCalledOnce(); fetch.mockClear(); ref.mockClear();
     // Clearing a saved URL restores production without a separate save migration.
     registerSettings.mock.results[0]!.value.read = async () => ({ status: 'ready', values: { ...settings, viewerUrl: '' } });
     await expect(handle.mock.calls[0]![1]({ agentId: 'chosen' }, { paseo: { agents: { ref } } }))
-      .resolves.toEqual({ url: `https://chat-share.pages.dev/#response-owner/${id}` });
+      .resolves.toEqual({ url: `https://chat-share.pages.dev/#response-owner/${id}`, version: { epoch: snapshot.epoch, maxSeq: snapshot.window.maxSeq } });
     expect(registerSettings).toHaveBeenCalledOnce(); expect(ref).toHaveBeenCalledExactlyOnceWith('chosen'); expect(fetch).toHaveBeenCalledOnce();
     fetch.mockRestore();
   });
@@ -152,5 +153,47 @@ describe('plugin RPC wiring', () => {
     expect(ref).not.toHaveBeenCalled();
     read.mockRejectedValueOnce(new Error(token));
     await expect(handler({ agentId: 'chosen' }, {})).resolves.toEqual({ error: '分享失败，请稍后重试。' });
+  });
+});
+
+const gist = (agentId: string, maxSeq = 12, createdAt = '2026-11-03T12:00:00Z', gistId = id) => ({
+  id: gistId, public: false, owner: { login: 'owner' }, created_at: createdAt,
+  description: `Chat-Share snapshot ${agentId} ${encodeURIComponent(snapshot.epoch)} ${maxSeq}`,
+  files: { [SHARE_FILENAME]: { filename: SHARE_FILENAME } },
+});
+
+describe('snapshot discovery', () => {
+  it('restores the latest snapshot version per conversation and ignores unrelated or malformed Gists', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify([
+      gist('chosen', 12), gist('chosen', 10, '2026-11-03T11:00:00Z', 'b'.repeat(32)), gist('other', 3),
+      { ...gist('public'), public: true }, { ...gist('wrong-file'), files: { 'other.json': {} } },
+      { ...gist('bad-id'), id: 'not-a-gist' }, { ...gist('legacy'), description: 'Chat-Share snapshot' },
+      { ...gist('bad-version'), description: 'Chat-Share snapshot chosen epoch -1' },
+      { ...gist('bad-encoding'), description: 'Chat-Share snapshot chosen %E0 99' },
+    ])));
+    const links = await listShareLinks(settings, { fetch, readGh: async () => token });
+    expect(links).toEqual({
+      chosen: { url: `https://viewer.example/base/#owner/${id}`, version: { epoch: snapshot.epoch, maxSeq: 12 } },
+      other: { url: `https://viewer.example/base/#owner/${id}`, version: { epoch: snapshot.epoch, maxSeq: 3 } },
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(JSON.stringify(links)).not.toContain(token);
+  });
+  it('finds older shares beyond three pages rather than reporting them as unshared', async () => {
+    const unrelated = Array.from({ length: 100 }, () => ({ description: 'unrelated' }));
+    const fetch = vi.fn().mockImplementation(async (url: string) => new Response(JSON.stringify(url.endsWith('page=4') ? [gist('older')] : unrelated)));
+    const links = await listShareLinks(settings, { fetch, readGh: async () => token });
+    expect(links.older?.version).toEqual({ epoch: snapshot.epoch, maxSeq: 12 });
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+  it.each([401, 429, 503])('reports a failed lookup for HTTP %s without leaking the response', async status => {
+    const fetch = vi.fn().mockResolvedValue(new Response(token, { status }));
+    try { await listShareLinks(settings, { fetch, readGh: async () => token }); expect.fail('Expected failure'); }
+    catch (error) { expect(String(error)).not.toContain(token); expect(String(error)).toMatch(/GitHub/); }
+  });
+  it('returns a typed lookup error instead of falsely claiming no links exist', async () => {
+    const handle = vi.fn();
+    contribute({ registerSettings: () => ({ read: async () => ({ status: 'ready', values: { viewerUrl: 'ftp://bad' } }) }), handle } as unknown as PluginServerContext);
+    await expect(handle.mock.calls[1]![1]({})).resolves.toEqual({ error: '查看器地址无效，请在插件设置中修改。' });
   });
 });
