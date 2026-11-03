@@ -549,17 +549,88 @@ export function renderTimeline(share: ShareDocument, t: Translations): HTMLEleme
     }
 
     if (item.type === 'reasoning' || item.type === 'tool_call') {
-      if (item.type === 'reasoning') {
-        const group = [{ entry, index }];
-        while (share.entries[index + 1]?.item.type === 'reasoning') {
-          index++;
-          group.push({ entry: share.entries[index]!, index });
+      type StepDef =
+        | { type: 'reasoning'; group: { entry: TimelineEntry; index: number }[] }
+        | { type: 'tool_call'; entry: TimelineEntry; index: number };
+      const steps: StepDef[] = [];
+      const runEntries: { entry: TimelineEntry; index: number }[] = [];
+
+      while (
+        index < share.entries.length &&
+        (share.entries[index]!.item.type === 'reasoning' || share.entries[index]!.item.type === 'tool_call')
+      ) {
+        const cur = { entry: share.entries[index]!, index };
+        runEntries.push(cur);
+        if (cur.entry.item.type === 'reasoning') {
+          const group = [cur];
+          while (share.entries[index + 1]?.item.type === 'reasoning') {
+            index++;
+            const next = { entry: share.entries[index]!, index };
+            runEntries.push(next);
+            group.push(next);
+          }
+          steps.push({ type: 'reasoning', group });
+        } else {
+          steps.push({ type: 'tool_call', entry: cur.entry, index: cur.index });
         }
-        timeline.append(createReasoningRow(group));
-      } else {
-        timeline.append(createStepRow(entry, index));
+        index++;
       }
-      index++;
+
+      if (steps.length === 1) {
+        // Single step run renders as that plain row with no extra level
+        const single = steps[0]!;
+        if (single.type === 'reasoning') {
+          timeline.append(createReasoningRow(single.group));
+        } else {
+          timeline.append(createStepRow(single.entry, single.index));
+        }
+      } else {
+        // Multi step run folds into merged row
+        const failedCount = runEntries.filter(r => isFailed(r.entry.item)).length;
+        const merged = element('details', 'timeline-row merged-row');
+        merged.dataset.type = 'merged';
+
+        const summary = element('summary', 'row-summary merged-summary');
+
+        const iconSlot = element('span', 'row-icon');
+        const kindIcon = createIcon('merged', 14);
+        kindIcon.classList.add('icon-kind');
+        const expandIcon = createIcon('chevron', 14);
+        expandIcon.classList.add('icon-expand');
+        iconSlot.append(kindIcon, expandIcon);
+
+        const label = element('span', 'row-label');
+        label.textContent = stepSummary(runEntries.map(r => r.entry), locale);
+        summary.append(iconSlot, label);
+
+        if (failedCount > 0) {
+          const failedBadge = element(
+            'span',
+            'badge failed-badge',
+            failedCountText(failedCount, locale)
+          );
+          summary.append(failedBadge);
+        }
+
+        const truncsInRun = runEntries.flatMap(r => share.truncations.filter(m => m.entry === r.index));
+        if (truncsInRun.length > 0) {
+          const isDefinite = truncsInRun.some(m => m.certainty === 'definite');
+          summary.append(element('span', 'truncation', isDefinite ? t.truncated : t.possiblyTruncated));
+        }
+
+        merged.append(summary);
+
+        const stepsContainer = element('div', 'merged-steps');
+        for (const step of steps) {
+          if (step.type === 'reasoning') {
+            stepsContainer.append(createReasoningRow(step.group));
+          } else {
+            stepsContainer.append(createStepRow(step.entry, step.index));
+          }
+        }
+        merged.append(stepsContainer);
+        timeline.append(merged);
+      }
       continue;
     }
 

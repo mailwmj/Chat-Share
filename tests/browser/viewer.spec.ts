@@ -193,17 +193,17 @@ test('benchmark: expand-all and collapse-all settle efficiently', async ({ page 
 
 test('hover swaps left icon to expand chevron without row background, and clicking toggles open', async ({ page }) => {
   await page.goto(`/?preview=design${fragment}`);
-  const firstStep = page.locator('details.timeline-row.step-row').first();
-  const summary = firstStep.locator('summary.row-summary');
-  const kindIcon = firstStep.locator('.row-icon .icon-kind');
-  const expandIcon = firstStep.locator('.row-icon .icon-expand');
+  const mergedRow = page.locator('details.timeline-row.merged-row').first();
+  const summary = mergedRow.locator('> summary');
+  const kindIcon = summary.locator('.row-icon .icon-kind');
+  const expandIcon = summary.locator('.row-icon .icon-expand');
 
   // Initially: closed, not hovered
   await expect(kindIcon).toBeVisible();
   await expect(expandIcon).toBeHidden();
-  expect(await firstStep.getAttribute('open')).toBeNull();
+  expect(await mergedRow.getAttribute('open')).toBeNull();
 
-  // Hover over the summary
+  // Hover over the merged summary
   await summary.hover();
   await expect(kindIcon).toBeHidden();
   await expect(expandIcon).toBeVisible();
@@ -212,13 +212,36 @@ test('hover swaps left icon to expand chevron without row background, and clicki
   const bg = await summary.evaluate(el => window.getComputedStyle(el).backgroundColor);
   expect(bg).toBe('rgba(0, 0, 0, 0)');
 
-  // Click summary anywhere to expand
+  // Click summary anywhere to expand merged row
   await summary.click();
-  expect(await firstStep.getAttribute('open')).not.toBeNull();
-  await expect(expandIcon).toBeVisible();
-  await expect(firstStep.locator('.disclosure-body')).toBeVisible();
+  expect(await mergedRow.getAttribute('open')).not.toBeNull();
+  await expect(mergedRow.locator('.merged-steps')).toBeVisible();
 
-  // Click again to collapse
+  // Inside merged steps: test inner step row icon swap and toggle
+  const innerStep = mergedRow.locator('.merged-steps > details.timeline-row.step-row').first();
+  const innerSummary = innerStep.locator('> summary');
+  const innerKindIcon = innerSummary.locator('.row-icon .icon-kind');
+  const innerExpandIcon = innerSummary.locator('.row-icon .icon-expand');
+
+  await expect(innerKindIcon).toBeVisible();
+  await expect(innerExpandIcon).toBeHidden();
+
+  await innerSummary.hover();
+  await expect(innerKindIcon).toBeHidden();
+  await expect(innerExpandIcon).toBeVisible();
+
+  const innerBg = await innerSummary.evaluate(el => window.getComputedStyle(el).backgroundColor);
+  expect(innerBg).toBe('rgba(0, 0, 0, 0)');
+
+  await innerSummary.click();
+  expect(await innerStep.getAttribute('open')).not.toBeNull();
+  await expect(innerStep.locator('.disclosure-body')).toBeVisible();
+
+  // Click again to collapse inner step
+  await innerSummary.click();
+  expect(await innerStep.getAttribute('open')).toBeNull();
+
+  // Click merged summary again to collapse merged row
   await summary.click();
-  expect(await firstStep.getAttribute('open')).toBeNull();
+  expect(await mergedRow.getAttribute('open')).toBeNull();
 });

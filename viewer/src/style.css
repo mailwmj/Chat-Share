@@ -284,12 +284,32 @@ h1 {
 .positive { color: var(--positive); }
 .negative { color: var(--negative); }
 
+/* Nested steps inside merged row */
+.merged-steps {
+  border-left: 1px solid var(--line);
+  margin: 3px 0 8px 8px;
+  padding: 2px 0 4px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.merged-steps .timeline-row.step-row > summary {
+  min-height: 26px;
+  padding: 2px 0;
+  font-size: 12.5px;
+}
+
 /* Detail bodies */
 .disclosure-body {
   padding: 6px 0 14px 18px;
   border-left: 1px solid var(--line);
   margin: 2px 0 10px 8px;
   min-width: 0;
+}
+.merged-steps .disclosure-body {
+  border-left: 1px solid var(--line);
+  margin: 2px 0 8px 8px;
+  padding: 4px 0 8px 14px;
 }
 
 /* Shell panel */

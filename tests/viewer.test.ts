@@ -12,12 +12,13 @@ describe('safe, readable rendering', () => {
   it('renders future/plugin/notification items as collapsed rows, never drops unknown content', async () => {
     const share = maliciousShare(), node = renderTimeline(share, messages.en); document.body.append(node);
     const nonMessageCount = share.entries.filter(e => !['user_message', 'assistant_message'].includes(e.item.type)).length;
-    // Exactly every non-message entry maps to exactly one details.timeline-row
-    const stepAndPlainRows = [...node.querySelectorAll('details.timeline-row')];
+    // Exactly every non-message entry maps to exactly one details.timeline-row:not(.merged-row)
+    const stepAndPlainRows = [...node.querySelectorAll('details.timeline-row:not(.merged-row)')];
     expect(stepAndPlainRows).toHaveLength(nonMessageCount);
     expect(stepAndPlainRows).toHaveLength(8);
-    // Top-level structure: 4 messages, 8 step/plain rows = 12 children
-    expect(node.children).toHaveLength(12);
+    // Top-level structure: 4 messages, 2 merged runs, 1 single step row, 3 plain non-step rows = 10 children
+    expect(node.children).toHaveLength(10);
+    expect(node.querySelectorAll('details.timeline-row.merged-row')).toHaveLength(2);
     expect(node.querySelectorAll('.message')).toHaveLength(4);
     expect(stepAndPlainRows.every(row => !row.hasAttribute('open'))).toBe(true);
 
@@ -141,7 +142,7 @@ describe('raw Gist loading boundary', () => {
 });
 
 describe('merged step runs and boundary conditions', () => {
-  it('renders consecutive reasoning and tool_call entries directly as flat step rows with icon swap', () => {
+  it('folds consecutive reasoning and tool_call entries into one merged row with summary and inner step rows', () => {
     const entries = [
       entry({ type: 'user_message', text: 'Run the tests' }, 1),
       entry({ type: 'reasoning', text: 'Let me check existing tests first.' }, 2),
@@ -153,22 +154,29 @@ describe('merged step runs and boundary conditions', () => {
     const node = renderTimeline(share, messages.en);
     document.body.append(node);
 
-    // Flat rows: 1 user msg + 1 reasoning row + 2 tool rows + 1 assistant msg = 5 children
-    expect(node.children).toHaveLength(5);
-    const stepRows = [...node.querySelectorAll('details.timeline-row.step-row')];
-    expect(stepRows).toHaveLength(3);
+    // Structure: 1 user msg + 1 merged row + 1 assistant msg = 3 children
+    expect(node.children).toHaveLength(3);
+    const merged = node.querySelectorAll('.timeline-row.merged-row');
+    expect(merged).toHaveLength(1);
+    const mergedRow = merged[0] as HTMLDetailsElement;
+    expect(mergedRow.open).toBe(false);
+    expect(mergedRow.querySelector('.row-label')?.textContent).toBe('Thought 1 time, ran 1 command and read 1 file');
 
-    // Each row has .row-icon containing both .icon-kind and .icon-expand, and no right chevron
-    for (const row of stepRows) {
-      const summary = row.querySelector('summary')!;
+    // Both merged row and inner steps have icon swap and no right chevron
+    const mergedSummary = mergedRow.querySelector('summary')!;
+    expect(mergedSummary.querySelector('.row-icon .icon-kind')).not.toBeNull();
+    expect(mergedSummary.querySelector('.row-icon .icon-expand')).not.toBeNull();
+    expect(mergedSummary.querySelector('.chevron-slot')).toBeNull();
+
+    // Inner step rows inside the merged row
+    const innerSteps = mergedRow.querySelectorAll('.timeline-row.step-row');
+    expect(innerSteps).toHaveLength(3);
+    for (const step of innerSteps) {
+      const summary = step.querySelector('summary')!;
       expect(summary.querySelector('.row-icon .icon-kind')).not.toBeNull();
       expect(summary.querySelector('.row-icon .icon-expand')).not.toBeNull();
       expect(summary.querySelector('.chevron-slot')).toBeNull();
     }
-
-    expect(stepRows[0]!.querySelector('.row-label')?.textContent).toBe('Thinking');
-    expect(stepRows[1]!.querySelector('.row-label')?.textContent).toBe('Read: test.ts');
-    expect(stepRows[2]!.querySelector('.row-label')?.textContent).toBe('Bash: npm test');
   });
 
   it('renders a single-step run as a plain row with no extra level', () => {
@@ -181,8 +189,11 @@ describe('merged step runs and boundary conditions', () => {
     const node = renderTimeline(share, messages.en);
     document.body.append(node);
 
+    // Single step run should not have an outer merged-row
+    expect(node.querySelectorAll('.timeline-row.merged-row')).toHaveLength(0);
     const stepRows = node.querySelectorAll('.timeline-row');
     expect(stepRows).toHaveLength(1);
+    expect(stepRows[0]!.classList.contains('merged-row')).toBe(false);
     expect(stepRows[0]!.querySelector('summary')?.textContent).toContain('Read: a.ts');
   });
 
@@ -197,16 +208,19 @@ describe('merged step runs and boundary conditions', () => {
     const node = renderTimeline(share, messages.en);
     document.body.append(node);
 
-    // Top-level timeline children: 3 tool rows + 1 error row = 4 rows
+    // Top-level timeline children:
+    // 1: single-step tool run t1 (plain row)
+    // 2: error row
+    // 3: 2-step merged run [t2, t3]
     const topRows = [...node.querySelectorAll(':scope > details.timeline-row')];
-    expect(topRows).toHaveLength(4);
+    expect(topRows).toHaveLength(3);
     expect((topRows[0] as HTMLElement).dataset.type).toBe('tool_call');
+    expect(topRows[0]!.classList.contains('merged-row')).toBe(false);
     expect((topRows[1] as HTMLElement).dataset.type).toBe('error');
-    expect((topRows[2] as HTMLElement).dataset.type).toBe('tool_call');
-    expect((topRows[3] as HTMLElement).dataset.type).toBe('tool_call');
+    expect(topRows[2]!.classList.contains('merged-row')).toBe(true);
   });
 
-  it('keeps failure and truncation visible on collapsed rows', () => {
+  it('keeps failure and truncation visible on collapsed merged rows and never hides them by folding', () => {
     const entries = [
       entry({ type: 'tool_call', callId: 't1', name: 'Bash', status: 'failed', error: 'exit 1', detail: { type: 'shell', command: 'npm test', output: 'failed' } }, 1),
       entry({ type: 'tool_call', callId: 't2', name: 'Read', status: 'completed', error: null, detail: { type: 'read', filePath: '/app/2.ts' } }, 2),
@@ -218,24 +232,25 @@ describe('merged step runs and boundary conditions', () => {
     const node = renderTimeline(share, messages.en);
     document.body.append(node);
 
-    const rows = node.querySelectorAll('.timeline-row.step-row');
-    expect(rows).toHaveLength(2);
+    const merged = node.querySelector('.timeline-row.merged-row') as HTMLDetailsElement;
+    expect(merged).toBeDefined();
+    expect(merged.open).toBe(false);
 
-    // While collapsed, failed row must show failure badge and truncation badge
-    const failedSummary = rows[0]!.querySelector('summary')!;
-    const failedBadge = failedSummary.querySelector('.failed-badge');
+    // While collapsed, merged summary must show failure count and truncation badge
+    const summary = merged.querySelector('summary')!;
+    const failedBadge = summary.querySelector('.failed-badge');
     expect(failedBadge).not.toBeNull();
-    expect(failedBadge!.textContent).toBe(messages.en.failed);
+    expect(failedBadge!.textContent).toContain('1 failed');
 
-    const truncBadge = failedSummary.querySelector('.truncation');
+    const truncBadge = summary.querySelector('.truncation');
     expect(truncBadge).not.toBeNull();
     expect(truncBadge!.textContent).toBe(messages.en.truncated);
 
     // When in Chinese
     const nodeZh = renderTimeline(share, messages.zh);
-    const rowZh = nodeZh.querySelector('.timeline-row.step-row')!;
-    expect(rowZh.querySelector('.failed-badge')?.textContent).toBe(messages.zh.failed);
-    expect(rowZh.querySelector('.truncation')?.textContent).toBe(messages.zh.truncated);
+    const mergedZh = nodeZh.querySelector('.timeline-row.merged-row')!;
+    expect(mergedZh.querySelector('.failed-badge')?.textContent).toContain('1 次失败');
+    expect(mergedZh.querySelector('.truncation')?.textContent).toBe(messages.zh.truncated);
   });
 
   it('does not fold non-merged items: notification, compaction, plugin, todo, and future types', () => {
