@@ -12,14 +12,27 @@ vi.mock('@getpaseo/plugin/client', () => {
   const api = { agents: { list: host.list } };
   return { usePaseo: () => api, useRpc: () => host.rpc };
 });
-vi.mock('@getpaseo/plugin/client/ui', () => ({ copyText: host.copy, useToast: () => host.toast }));
-vi.mock('react-native', async () => {
+vi.mock('@getpaseo/plugin/client/ui', async () => {
   const { createElement } = await import('react');
   return {
-    View: ({ children }: { children: unknown }) => createElement('div', null, children as never),
-    Text: ({ children }: { children: unknown }) => createElement('span', null, children as never),
-    Pressable: ({ children, onPress, disabled, accessibilityLabel }: { children: unknown; onPress: () => void; disabled?: boolean; accessibilityLabel: string }) =>
-      createElement('button', { onClick: onPress, disabled, 'aria-label': accessibilityLabel }, children as never),
+    copyText: host.copy, useToast: () => host.toast, Icon: () => null,
+    ScrollView: ({ children }: { children: unknown }) => createElement('div', null, children as never),
+  };
+});
+vi.mock('react-native', async () => {
+  const { createElement } = await import('react');
+  const View = ({ children }: { children?: unknown }) => createElement('div', null, children as never);
+  const finish = () => ({ start: (done?: () => void) => done?.(), stop: () => {} });
+  return {
+    View,
+    Text: ({ children, numberOfLines }: { children: unknown; numberOfLines?: number }) => createElement('span', { 'data-lines': numberOfLines }, children as never),
+    Pressable: ({ children, onPress, disabled, accessibilityLabel, accessibilityState }: { children: unknown; onPress: () => void; disabled?: boolean; accessibilityLabel: string; accessibilityState?: { selected?: boolean } }) =>
+      createElement('button', { onClick: onPress, disabled, 'aria-label': accessibilityLabel, 'aria-selected': accessibilityState?.selected }, children as never),
+    ActivityIndicator: () => null,
+    AccessibilityInfo: { isReduceMotionEnabled: async () => false, addEventListener: () => ({ remove: () => {} }) },
+    Animated: { View, Value: class { setValue() {} }, timing: finish },
+    Easing: { bezier: () => (t: number) => t, out: (f: unknown) => f, back: () => (t: number) => t },
+    Platform: { OS: 'web' },
   };
 });
 
@@ -106,7 +119,7 @@ describe('share popover', () => {
     const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
     const Content = createSharePopover();
     await act(async () => root!.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Content,
-      { workspaceId: 'current', theme: { colors: {} } } as PluginButtonContentProps))));
+      { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps))));
     await act(async () => dir.snapshot({ entries: [{ agent: { id: 'synthetic', title: 'Synthetic', provider: 'codex', workspaceId: 'current' } }] }));
     await act(async () => { node.querySelector('button')!.click(); await new Promise(done => setTimeout(done, 10)); });
     expect(host.toast.error).toHaveBeenCalledExactlyOnceWith(expected);
@@ -123,7 +136,7 @@ describe('share popover', () => {
     host.copy.mockRejectedValue(new Error('clipboard denied'));
     const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
     const Content = createSharePopover();
-    const props = { workspaceId: 'current', theme: { colors: {} } } as PluginButtonContentProps;
+    const props = { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps;
     await act(async () => root!.render(createElement(QueryClientProvider, { client: new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }) }, createElement(Content, props))));
     await act(async () => dir.snapshot({ entries: [
       { agent: { id: 'chosen', title: 'Synthetic agent', provider: 'codex', workspaceId: 'current', updatedAt: '2026-11-03T10:00:00Z' } },
@@ -152,7 +165,7 @@ describe('share popover', () => {
     const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
     const Content = createSharePopover();
     await act(async () => root!.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Content,
-      { workspaceId: 'current', theme: { colors: {} } } as PluginButtonContentProps))));
+      { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps))));
     const older = { id: 'old', title: 'Older', provider: 'claude', workspaceId: 'current', updatedAt: '2026-11-03T08:00:00Z' };
     const newer = { id: 'new', title: 'Newer', provider: 'codex', workspaceId: 'current', updatedAt: '2026-11-03T09:00:00Z' };
     const titles = () => Array.from(node.querySelectorAll('button')).map(button => button.getAttribute('aria-label'));
@@ -160,5 +173,36 @@ describe('share popover', () => {
     expect(titles()).toEqual(['分享 Newer', '分享 Older']);
     await act(async () => dir.update({ type: 'agent_update', payload: { kind: 'upsert', agent: { ...older, updatedAt: '2026-11-03T10:00:00Z' } } }));
     expect(titles()).toEqual(['分享 Older', '分享 Newer']);
+  });
+  it('marks the shared session while sharing and after, enables copying only once a link exists, and expands the link only when copying fails', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const dir = directory(); host.list.mockResolvedValue(dir);
+    const pending = deferred<{ url: string }>(); host.rpc.mockReturnValue(pending.promise);
+    host.copy.mockResolvedValue(undefined);
+    const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
+    const Content = createSharePopover();
+    await act(async () => root!.render(createElement(QueryClientProvider, { client: new QueryClient() }, createElement(Content,
+      { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps))));
+    await act(async () => dir.snapshot({ entries: [
+      { agent: { id: 'a', title: 'First', provider: 'claude', workspaceId: 'current', updatedAt: '2026-11-03T10:00:00Z' } },
+      { agent: { id: 'b', title: 'Second', provider: 'codex', workspaceId: 'current', updatedAt: '2026-11-03T09:00:00Z' } },
+    ] }));
+    const row = (label: string) => node.querySelector(`button[aria-label="分享 ${label}"]`)!;
+    const copyButton = () => Array.from(node.querySelectorAll('button')).find(button => button.textContent === '复制链接')!;
+    expect(row('First').getAttribute('aria-selected')).toBe('false');
+    await act(async () => { (row('Second') as HTMLButtonElement).click(); await new Promise(done => setTimeout(done, 10)); });
+    expect(row('Second').getAttribute('aria-selected')).toBe('true');
+    expect(row('First').getAttribute('aria-selected')).toBe('false');
+    expect(copyButton().disabled).toBe(true);
+    const url = `https://viewer.example/#synthetic/${'b'.repeat(32)}`;
+    await act(async () => { pending.resolve({ url }); await new Promise(done => setTimeout(done, 10)); });
+    expect(row('Second').getAttribute('aria-selected')).toBe('true');
+    expect(copyButton().disabled).toBe(false);
+    const linkText = () => Array.from(node.querySelectorAll('span')).find(span => span.textContent === url)!;
+    expect(linkText().getAttribute('data-lines')).toBe('1');
+    host.copy.mockRejectedValueOnce(new Error('denied'));
+    await act(async () => { copyButton().click(); await new Promise(done => setTimeout(done, 10)); });
+    expect(linkText().getAttribute('data-lines')).toBeNull();
+    expect(host.rpc).toHaveBeenCalledOnce();
   });
 });
