@@ -1,15 +1,17 @@
 import './style.css';
 import { decodeBytes, deriveShareKey, encodeBytes, openLockedShare, passwordDigits } from '../../shared/encryption';
-import { ShareError, type LockedShare, type ShareDocument, type TimelineEntry } from '../../shared/format';
+import { ShareError, type LockedShare, type ShareDocument } from '../../shared/format';
 import { downloadMarkdown } from '../../shared/download';
 import { browserLocale, messages } from './i18n';
 import { element, renderTimeline, createIcon } from './render';
 import { loadShare, rawUrl } from './load';
+import { createOutline } from './outline';
 
 const locale = browserLocale(navigator.languages), t = messages[locale];
 document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 let loading: AbortController | undefined;
+let outline: ReturnType<typeof createOutline>;
 
 type Theme = 'auto' | 'light' | 'dark';
 type FontSize = 'sm' | 'md' | 'lg' | 'xl';
@@ -71,6 +73,8 @@ function isDark(): boolean {
 }
 
 export function showShare(share: ShareDocument): void {
+  outline?.dispose();
+  outline = undefined;
   const title = share.session.title || t.untitled;
   document.title = `${title} · Chat-Share`;
   const header = element('header', 'toolbar'), inner = element('div', 'toolbar-inner');
@@ -78,74 +82,6 @@ export function showShare(share: ShareDocument): void {
   const heading = element('h1', '', title);
   heading.title = title;
   const actions = element('nav', 'actions');
-
-  // Extract user entries for TOC
-  const userEntries: { entry: TimelineEntry; index: number; text: string }[] = [];
-  share.entries.forEach((e, idx) => {
-    if (e.item.type === 'user_message') {
-      const text = typeof e.item.text === 'string' ? e.item.text : '';
-      userEntries.push({ entry: e, index: idx, text });
-    }
-  });
-
-  // Side Dash Outline Navigation
-  let sideNav: HTMLElement | undefined;
-  const dashButtons: HTMLButtonElement[] = [];
-
-  if (userEntries.length > 0) {
-    sideNav = element('nav', 'side-outline-nav');
-    sideNav.setAttribute('aria-label', t.tableOfContents);
-
-    userEntries.forEach((item, i) => {
-      const dashBtn = element('button', 'side-dash-item') as HTMLButtonElement;
-      dashBtn.type = 'button';
-      dashBtn.setAttribute('data-entry-index', String(item.index));
-      const cleanSnippet = item.text
-        .replace(/^[#\s*`>_~-]+/gm, '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 60) || t.untitled;
-      dashBtn.setAttribute('aria-label', `Q${i + 1}: ${cleanSnippet}`);
-
-      const bar = element('span', 'side-dash-bar');
-      const bubble = element('div', 'side-dash-bubble');
-      const badge = element('span', 'side-dash-badge', `Q${i + 1}`);
-      const textSpan = element('span', 'side-dash-text', cleanSnippet);
-      bubble.append(badge, textSpan);
-      dashBtn.append(bar, bubble);
-
-      dashBtn.addEventListener('click', () => {
-        const target = document.getElementById(`entry-${item.index}`);
-        if (target) {
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          target.classList.remove('highlight-target');
-          void target.offsetWidth;
-          target.classList.add('highlight-target');
-          setTimeout(() => target.classList.remove('highlight-target'), 2000);
-        }
-      });
-
-      sideNav!.append(dashBtn);
-      dashButtons.push(dashBtn);
-    });
-  }
-
-  function updateActiveDash() {
-    if (dashButtons.length === 0) return;
-    let currentIdx = 0;
-    for (let i = 0; i < userEntries.length; i++) {
-      const el = document.getElementById(`entry-${userEntries[i]!.index}`);
-      if (el) {
-        const rect = el.getBoundingClientRect();
-        if (rect.top <= window.innerHeight * 0.45) {
-          currentIdx = i;
-        }
-      }
-    }
-    dashButtons.forEach((btn, idx) => {
-      btn.classList.toggle('active', idx === currentIdx);
-    });
-  }
 
   // 1. Expand / Collapse All Button
   const expand = element('button', 'button icon-btn', '');
@@ -446,7 +382,6 @@ export function showShare(share: ShareDocument): void {
         } else {
           backToTop.classList.remove('visible');
         }
-        updateActiveDash();
         scrollTicking = false;
       });
       scrollTicking = true;
@@ -459,13 +394,13 @@ export function showShare(share: ShareDocument): void {
   header.append(inner);
 
   app.replaceChildren(header, timeline, backToTop);
-  if (sideNav) {
-    app.append(sideNav);
-  }
-  updateActiveDash();
+  outline = createOutline(timeline, header, t);
+  if (outline) app.append(outline.nav);
 }
 
 function showState(message: string, retry = false): void {
+  outline?.dispose();
+  outline = undefined;
   document.title = 'Chat-Share';
   const header = element('header', 'toolbar'), inner = element('div', 'toolbar-inner');
   inner.append(element('h1', '', t.title)); header.append(inner);
@@ -480,6 +415,8 @@ function showState(message: string, retry = false): void {
 }
 
 function showLock(locked: LockedShare, keyName: string, signal: AbortSignal): void {
+  outline?.dispose();
+  outline = undefined;
   document.title = 'Chat-Share';
   const header = element('header', 'toolbar'), inner = element('div', 'toolbar-inner');
   inner.append(element('h1', '', t.title)); header.append(inner);

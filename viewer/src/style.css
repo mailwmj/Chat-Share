@@ -121,6 +121,15 @@
   display: none !important;
 }
 
+#app { --reading-column-width: var(--content-width); }
+
+@media (min-width: 769px) {
+  /* Keep the column centred, with room for the 40px outline and its gutter. */
+  #app:has(> .side-outline-nav) {
+    --reading-column-width: min(var(--content-width), calc(100vw - 128px));
+  }
+}
+
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--ground); color: var(--ink); }
 button, input { font: inherit; }
@@ -138,7 +147,7 @@ button:focus-visible, summary:focus-visible, a:focus-visible, input:focus-visibl
   border-bottom: 1px solid var(--line);
 }
 .toolbar-inner {
-  max-width: var(--content-width, 848px);
+  max-width: var(--reading-column-width);
   min-height: 60px;
   padding: 10px 24px;
   margin: 0 auto;
@@ -217,7 +226,7 @@ h1 {
 .button:disabled { color: var(--muted); cursor: default; }
 
 .timeline {
-  max-width: var(--content-width, 848px);
+  max-width: var(--reading-column-width);
   padding: 36px 24px 96px;
   margin: 0 auto;
   transition: max-width 180ms ease;
@@ -228,6 +237,7 @@ h1 {
   overflow-wrap: anywhere;
 }
 .message.user {
+  scroll-margin-top: 88px;
   margin-left: auto;
   max-width: min(85%, 640px);
   padding: 14px 18px;
@@ -827,21 +837,25 @@ pre code {
 /* Side Dash Outline Navigation */
 .side-outline-nav {
   position: fixed;
-  left: 20px;
-  top: 50%;
+  left: calc((100vw - var(--reading-column-width)) / 2 - 48px);
+  top: calc(50% + 30px);
   transform: translateY(-50%);
+  width: 40px;
+  z-index: 9;
+}
+
+.side-outline-list {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  align-items: flex-start;
-  z-index: 50;
-  max-height: calc(100vh - 120px);
+  max-height: min(360px, calc(100dvh - 180px));
   overflow-y: auto;
-  overflow-x: visible;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
   scrollbar-width: none;
   padding: 8px 0;
 }
-.side-outline-nav::-webkit-scrollbar {
+.side-outline-list::-webkit-scrollbar {
   display: none;
 }
 
@@ -849,102 +863,120 @@ pre code {
   position: relative;
   display: flex;
   align-items: center;
-  padding: 6px 4px;
+  flex: 0 0 24px;
+  width: 40px;
+  padding: 0 2px;
   margin: 0;
   background: transparent;
   border: none;
   cursor: pointer;
-  outline: none;
   border-radius: 4px;
+}
+
+.side-dash-item:focus-visible {
+  outline-offset: -2px;
 }
 
 .side-dash-bar {
   display: block;
-  width: 14px;
-  height: 3px;
-  border-radius: 999px;
+  width: 36px;
+  height: 2px;
+  border-radius: 1px;
   background: var(--ink);
-  opacity: 0.25;
-  transition: width 180ms ease, opacity 180ms ease, background 180ms ease;
-}
-
-.side-dash-item:hover .side-dash-bar,
-.side-dash-item:focus-visible .side-dash-bar {
-  opacity: 0.75;
-  width: 18px;
+  opacity: 0.22;
+  transform: scaleX(0.3333);
+  transform-origin: left;
 }
 
 .side-dash-item.active .side-dash-bar {
-  width: 20px;
+  transform: scaleX(0.5);
+  opacity: 0.9;
+}
+
+.side-dash-item:has(+ .side-dash-item + .is-previewed) .side-dash-bar,
+.side-dash-item.is-previewed + .side-dash-item + .side-dash-item .side-dash-bar {
+  transform: scaleX(0.5556);
+}
+
+.side-dash-item:has(+ .is-previewed) .side-dash-bar,
+.side-dash-item.is-previewed + .side-dash-item .side-dash-bar {
+  transform: scaleX(0.7778);
+}
+
+.side-dash-item.preview-anchor {
+  anchor-name: --outline-message;
+}
+
+.side-dash-item.is-previewed .side-dash-bar {
+  transform: scaleX(1);
   opacity: 1;
 }
 
-/* Tooltip bubble on hover */
+/* Native top-layer positioning escapes the list's scroll clipping without inline styles. */
 .side-dash-bubble {
-  position: absolute;
-  left: calc(100% + 10px);
-  top: 50%;
-  transform: translateY(-50%) translateX(-4px);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  background: #18181b;
-  color: #f4f4f5;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
-  pointer-events: none;
+  position: fixed;
+  position-anchor: --outline-message;
+  position-area: right;
+  inset: auto;
+  margin: 0 0 0 12px;
+  width: 320px;
+  max-width: calc(100vw - 96px);
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 4px 20px rgb(0 0 0 / 12%);
+  overflow: visible;
   opacity: 0;
-  visibility: hidden;
-  white-space: nowrap;
-  max-width: 280px;
-  z-index: 60;
-  transition: opacity 150ms ease, transform 150ms ease, visibility 150ms ease;
+  transform: translateX(-4px);
+  transform-origin: left center;
+  transition: opacity 125ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 125ms cubic-bezier(0.23, 1, 0.32, 1),
+    display 125ms allow-discrete, overlay 125ms allow-discrete;
 }
 
-:root[data-theme="dark"] .side-dash-bubble {
-  background: #27272a;
-  color: #fafafa;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+.side-dash-bubble:popover-open {
+  opacity: 1;
+  transform: translateX(0);
 }
 
+@starting-style {
+  .side-dash-bubble:popover-open {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+}
+
+.side-dash-bubble.instant { transition: none; }
+
+/* Keep the preview open while crossing the gap from its marker. */
 .side-dash-bubble::before {
   content: '';
   position: absolute;
-  left: -4px;
-  top: 50%;
-  transform: translateY(-50%) rotate(45deg);
-  width: 8px;
-  height: 8px;
-  background: inherit;
-  border-left: inherit;
-  border-bottom: inherit;
-}
-
-.side-dash-item:hover .side-dash-bubble,
-.side-dash-item:focus-visible .side-dash-bubble {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(-50%) translateX(0);
-}
-
-.side-dash-badge {
-  font-size: 11px;
-  font-weight: 600;
-  color: #a1a1aa;
-  flex-shrink: 0;
+  inset: 0 100% 0 auto;
+  width: 13px;
 }
 
 .side-dash-text {
-  font-size: 12px;
-  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  font-size: 14px;
+  line-height: 1.5;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .side-dash-bar {
+    transition: transform 125ms ease, opacity 125ms ease;
+  }
+  .side-outline-nav:focus-within .side-dash-bar { transition: none; }
 }
 
 @media (max-width: 768px) {
-  .side-outline-nav {
+  .side-outline-nav, .side-dash-bubble {
     display: none !important;
   }
 }
@@ -982,12 +1014,11 @@ pre code {
 
 /* Message target highlight pulse animation */
 .highlight-target {
-  animation: highlightPulse 1.6s ease-out;
+  animation: highlightPulse 200ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 @keyframes highlightPulse {
-  0% { outline: 3px solid var(--link); outline-offset: 4px; }
-  50% { outline: 3px solid var(--link); outline-offset: 4px; }
-  100% { outline: 3px solid transparent; outline-offset: 4px; }
+  0%, 40% { border-color: var(--muted); }
+  100% { border-color: var(--user-border); }
 }
 
 /* Prefers-reduced-motion */

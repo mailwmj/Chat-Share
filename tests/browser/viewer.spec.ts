@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { designShare } from '../fixtures';
+import { designShare, entry } from '../fixtures';
 
 const fragment = '#local-preview/00000000000000000000000000000001';
 const screenshots = resolve('.local/screenshots');
@@ -334,31 +334,110 @@ test('reader preferences: theme, font-size, width, and chat-only filter toggle c
   await expect(popover).toBeHidden();
 });
 
-test('side dash outline navigates to question with tooltip and highlight pulse, hidden on mobile', async ({ page }) => {
+test('outline shows a readable user-only preview that stays open under the pointer', async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto(`/?preview=design${fragment}`);
   await expect(page.locator('.timeline')).toBeVisible();
-
   const sideNav = page.locator('.side-outline-nav');
-  await expect(sideNav).toBeVisible();
-
   const items = sideNav.locator('.side-dash-item');
-  const count = await items.count();
-  expect(count).toBeGreaterThan(0);
-
-  // Hover first dash - bubble tooltip becomes visible with question snippet
-  const firstItem = items.first();
-  await firstItem.hover();
-  const bubble = firstItem.locator('.side-dash-bubble');
+  await expect(items).toHaveCount(designShare().entries.filter(e => e.item.type === 'user_message').length);
+  await items.nth(1).hover();
+  const bubble = page.getByRole('tooltip');
   await expect(bubble).toBeVisible();
+  await expect(bubble).toContainText('我想给系统重构一下认证和授权中间件');
+  await expect(bubble).not.toContainText('Q2');
+  expect(await bubble.locator('button, a').count()).toBe(0);
 
-  // Click first question dash
-  await firstItem.click();
+  // Visibility alone misses the original bug: the bubble existed outside a clipped scrollport.
+  expect(await bubble.evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    const text = el.firstElementChild as HTMLElement;
+    return el.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))
+      && text.clientHeight <= Number.parseFloat(getComputedStyle(text).lineHeight) * 3
+      && text.scrollHeight > text.clientHeight;
+  })).toBe(true);
+  const lengths = await items.locator('.side-dash-bar').evaluateAll(bars => bars.map(bar => bar.getBoundingClientRect().width));
+  expect(lengths[1]).toBeGreaterThan(lengths[0]!);
+  await bubble.hover();
+  await page.waitForTimeout(200);
+  await expect(bubble).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(bubble).toBeHidden();
+  expect(await page.locator('style, [style]').count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __previewChecks: { csp: string[]; errors: number } }).__previewChecks)).toEqual({ csp: [], errors: 0 });
+});
 
-  // Target message receives highlight pulse
-  const firstUserMsg = page.locator('.message.user').first();
-  await expect(firstUserMsg).toHaveClass(/highlight-target/);
-
-  // Responsive: On mobile viewport (<768px), side nav is hidden
+test('outline follows all reading widths and reserves space at narrow desktop sizes', async ({ page }) => {
+  await page.goto(`/?preview=design${fragment}`);
+  const sideNav = page.locator('.side-outline-nav');
+  for (const [viewport, width] of [[1920, 'Standard'], [1920, 'Wide'], [1920, 'Full'], [1440, 'Wide'], [1024, 'Wide'], [800, 'Full']] as const) {
+    await page.setViewportSize({ width: viewport, height: 900 });
+    await page.locator('.reader-btn').click();
+    await page.locator('.reader-popover .popover-section').nth(1).getByRole('button', { name: width, exact: true }).click();
+    await page.keyboard.press('Escape');
+    await expect.poll(() => page.evaluate(() => {
+      const content = document.querySelector('.timeline')!.getBoundingClientRect();
+      const nav = document.querySelector('.side-outline-nav')!.getBoundingClientRect();
+      return content.left + 24 - nav.right;
+    })).toBeCloseTo(32, 0);
+    const bounds = (await sideNav.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(16);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  await sideNav.locator('.side-dash-item').first().hover();
+  await expect(page.getByRole('tooltip')).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(sideNav).toBeHidden();
+  await expect(page.getByRole('tooltip')).toBeHidden();
+});
+
+test('outline supports keyboard previews and jumps below the toolbar with reduced motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(`/?preview=design${fragment}`);
+  const items = page.locator('.side-dash-item');
+  await items.first().focus();
+  await expect(page.getByRole('tooltip')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('tooltip')).toBeHidden();
+  await expect(items.first()).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(items.nth(1)).toBeFocused();
+  await expect(page.getByRole('tooltip')).toContainText('我想给系统重构一下认证和授权中间件');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('tooltip')).toBeHidden();
+  await expect(items.nth(1)).toHaveAttribute('aria-current', 'location');
+  const gap = await page.evaluate(() => document.querySelectorAll('.message.user')[1]!.getBoundingClientRect().top
+    - document.querySelector('.toolbar')!.getBoundingClientRect().bottom);
+  expect(gap).toBeGreaterThanOrEqual(16);
+  expect(gap).toBeLessThanOrEqual(40);
+});
+
+test('a long outline scrolls independently, previews its last message, and follows reading progress', async ({ page }) => {
+  const share = designShare();
+  share.entries = Array.from({ length: 80 }, (_, i) => [
+    entry({ type: 'user_message', text: `第 ${i + 1} 条消息：请检查 **认证中间件** 和 [计费接口](https://example.com/billing)，然后说明需要修改的地方。` }, i * 2 + 1),
+    entry({ type: 'assistant_message', text: '检查结果与修改建议。\n\n'.repeat(24) }, i * 2 + 2),
+  ]).flat();
+  share.snapshot.window = { minSeq: 1, maxSeq: 160, nextSeq: 161 };
+  await page.route('https://gist.githubusercontent.com/**', route => route.fulfill({ json: share }));
+  await page.setViewportSize({ width: 1440, height: 700 });
+  await page.goto(`/${fragment}`);
+  const items = page.locator('.side-dash-item');
+  const list = page.locator('.side-outline-list');
+  await expect(items).toHaveCount(80);
+  expect((await list.boundingBox())!.height).toBeLessThanOrEqual(360);
+  await items.last().scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => scrollY)).toBe(0);
+  await items.last().hover();
+  const bubble = page.getByRole('tooltip');
+  await expect(bubble).toHaveText('第 80 条消息：请检查 认证中间件 和 计费接口，然后说明需要修改的地方。');
+  const bounds = (await bubble.boundingBox())!;
+  expect(bounds.y).toBeGreaterThan(61);
+  expect(bounds.y + bounds.height).toBeLessThan(700);
+  await items.last().click();
+  await page.mouse.move(1000, 650);
+  await expect(items.last()).toHaveAttribute('aria-current', 'location');
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+  await expect(items.first()).toHaveAttribute('aria-current', 'location');
+  await expect.poll(() => list.evaluate(el => el.scrollTop)).toBe(0);
 });
