@@ -242,7 +242,7 @@ describe('share popover', () => {
     expect(live.refetch).toHaveBeenCalledOnce();
     await act(async () => read.resolve({ epoch: version.epoch, window: { maxSeq: 11 } }));
     expect(button('复制 First 的链接')).toBeNull();
-    expect(button('重新生成 First 的分享')).not.toBeNull();
+    expect(button('分享 First')).not.toBeNull();
   });
   it('withdraws a remembered copy action when the check on reopen fails', async () => {
     const live = timeline(); host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
@@ -263,19 +263,19 @@ describe('share popover', () => {
     expect(button('复制 Renamed 的链接')).not.toBeNull();
     await act(async () => live.emit(11));
     expect(button('复制 Renamed 的链接')).toBeNull();
-    expect(button('重新生成 Renamed 的分享')).not.toBeNull();
+    expect(button('分享 Renamed')).not.toBeNull();
     host.rpc.mockResolvedValue(shared('b', 11));
     live.refetch.mockResolvedValue({ epoch: version.epoch, window: { maxSeq: 11 } });
-    await click('重新生成 Renamed 的分享');
+    await click('分享 Renamed');
     expect(host.rpc).toHaveBeenCalledExactlyOnceWith({ agentId: 'a' });
     expect(button('复制 Renamed 的链接')).not.toBeNull();
-    expect(button('重新生成 Renamed 的分享')).toBeNull();
+    expect(button('分享 Renamed')).toBeNull();
   });
   it.each(['new content', 'history reset'])('detects %s that arrived while closed and cleans up live subscriptions', async kind => {
     const live = timeline(kind === 'new content' ? 11 : 10, kind === 'history reset' ? 'new-epoch' : version.epoch);
     host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
     const { button } = await mountPopover();
-    expect(button('重新生成 First 的分享')).not.toBeNull();
+    expect(button('分享 First')).not.toBeNull();
     expect(button('复制 First 的链接')).toBeNull();
     await act(async () => root!.unmount()); root = undefined;
     expect(live.stop).toHaveBeenCalledOnce();
@@ -285,7 +285,7 @@ describe('share popover', () => {
     const upload = deferred<ReturnType<typeof shared>>(); host.rpc.mockReturnValue(upload.promise);
     const { button, click } = await mountPopover(); await click('分享 First');
     await act(async () => upload.resolve(shared('a', 11)));
-    expect(button('重新生成 First 的分享')).not.toBeNull();
+    expect(button('分享 First')).not.toBeNull();
     expect(button('复制 First 的链接')).toBeNull();
   });
   it('does not let an in-flight history read overwrite a newer live event', async () => {
@@ -294,7 +294,7 @@ describe('share popover', () => {
     const { button } = await mountPopover();
     expect(button('正在检查 First 的分享状态').disabled).toBe(true);
     await act(async () => { live.emit(11); read.resolve({ epoch: version.epoch, window: { maxSeq: 10 } }); });
-    expect(button('重新生成 First 的分享')).not.toBeNull();
+    expect(button('分享 First')).not.toBeNull();
     expect(button('复制 First 的链接')).toBeNull();
   });
   it('checks missed content after reconnect and invalidates a replaced history immediately', async () => {
@@ -303,7 +303,7 @@ describe('share popover', () => {
     expect(button('复制 First 的链接')).not.toBeNull();
     live.refetch.mockResolvedValue({ epoch: version.epoch, window: { maxSeq: 11 } });
     await act(async () => live.notify('subscription_restored'));
-    expect(button('重新生成 First 的分享')).not.toBeNull();
+    expect(button('分享 First')).not.toBeNull();
     await act(async () => live.notify('replacement'));
     expect(button('复制 First 的链接')).toBeNull();
   });
@@ -312,7 +312,7 @@ describe('share popover', () => {
     host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
     const { node, button } = await mountPopover();
     expect(button('复制 First 的链接')).toBeNull();
-    expect(button('重新生成 First 的分享')).not.toBeNull();
+    expect(button('分享 First')).not.toBeNull();
     expect(node.textContent).toContain('无法确认快照是否最新');
   });
   it('drops the unverifiable message when a lookup removes the link', async () => {
@@ -347,6 +347,81 @@ describe('share popover', () => {
     host.lookup.mockResolvedValue({ links: { a: shared() } });
     await click('重试读取分享链接');
     expect(button('复制 First 的链接')).not.toBeNull(); expect(host.rpc).not.toHaveBeenCalled();
+  });
+  describe('encrypted sharing', () => {
+    const locked = (id = 'a', maxSeq = 10, password: string | undefined = '482913') => ({ ...shared(id, maxSeq), locked: true as const, ...(password ? { password } : {}) });
+    it('encrypts an unshared conversation from the menu and copies the link with its password', async () => {
+      host.rpc.mockResolvedValue(locked()); host.copy.mockResolvedValue(undefined);
+      const { node, button, click } = await mountPopover();
+      expect(button('加密分享 First')).toBeNull();
+      await click('更多分享方式 First'); await click('加密分享 First');
+      expect(host.rpc).toHaveBeenCalledExactlyOnceWith({ agentId: 'a', locked: true });
+      expect(host.copy).toHaveBeenCalledExactlyOnceWith(`${shared().url}\n密码：482913`);
+      expect(host.toast.show).toHaveBeenCalledWith('链接和密码已复制', { variant: 'success' });
+      expect(button('复制 First 的链接和密码')).not.toBeNull();
+      expect(node.textContent).not.toContain('482913');
+    });
+    it('copies a current encrypted link without uploading, and shows its password when the clipboard fails', async () => {
+      host.lookup.mockResolvedValue({ links: { a: locked() } }); host.copy.mockRejectedValue(new Error('denied'));
+      const { node, click } = await mountPopover();
+      await click('复制 First 的链接和密码');
+      expect(host.rpc).not.toHaveBeenCalled();
+      expect(node.textContent).toContain(`${shared().url}\n密码：482913`);
+    });
+    it('offers resharing in either mode while the link is current', async () => {
+      host.lookup.mockResolvedValue({ links: { a: locked() } }); host.rpc.mockResolvedValue(shared('b'));
+      const { button, click } = await mountPopover();
+      await click('更多分享方式 First');
+      expect(button('重新加密分享 First')).not.toBeNull();
+      await click('重新分享 First');
+      expect(host.rpc).toHaveBeenCalledExactlyOnceWith({ agentId: 'a' });
+    });
+    it('offers sharing, not a copy, once an encrypted conversation has new content, and stays encrypted on the main action', async () => {
+      const live = timeline(11); host.timeline.mockReturnValue(live);
+      host.lookup.mockResolvedValue({ links: { a: locked() } }); host.rpc.mockResolvedValue(locked('b', 11, '100200'));
+      const { button, click } = await mountPopover();
+      expect(button('复制 First 的链接和密码')).toBeNull();
+      await click('加密分享 First');
+      expect(host.rpc).toHaveBeenCalledExactlyOnceWith({ agentId: 'a', locked: true });
+    });
+    it('only downgrades an updated encrypted conversation through the explicit menu choice', async () => {
+      host.timeline.mockReturnValue(timeline(11));
+      host.lookup.mockResolvedValue({ links: { a: locked() } }); host.rpc.mockResolvedValue(shared('b', 11));
+      const { button, click } = await mountPopover();
+      expect(button('分享 First')).toBeNull();
+      await click('更多分享方式 First'); await click('分享 First');
+      expect(host.rpc).toHaveBeenCalledExactlyOnceWith({ agentId: 'a' });
+    });
+    it('never copies a locked link whose password is unknown, and replaces it without a freshness check', async () => {
+      host.lookup.mockResolvedValue({ links: { a: locked('a', 10, '') } }); host.rpc.mockResolvedValue(locked('b'));
+      const { button, click } = await mountPopover();
+      expect(button('复制 First 的链接和密码')).toBeNull();
+      expect(host.timeline).not.toHaveBeenCalled();
+      await click('加密分享 First');
+      expect(host.rpc).toHaveBeenCalledExactlyOnceWith({ agentId: 'a', locked: true });
+    });
+    it('warns that the old plaintext link still works after encrypting, and not after re-encrypting', async () => {
+      host.lookup.mockResolvedValue({ links: { a: shared() } }); host.rpc.mockResolvedValue(locked('b')); host.copy.mockResolvedValue(undefined);
+      const { click } = await mountPopover();
+      await click('更多分享方式 First'); await click('重新加密分享 First');
+      expect(host.toast.show).toHaveBeenLastCalledWith('链接和密码已复制。旧的明文链接仍可打开，需到 GitHub 删除。', { variant: 'success' });
+      await click('更多分享方式 First'); await click('重新加密分享 First');
+      expect(host.toast.show).toHaveBeenLastCalledWith('链接和密码已复制', { variant: 'success' });
+    });
+    it('disables the menu while checking and while uploading', async () => {
+      const read = deferred<unknown>(), live = timeline(); live.refetch.mockReturnValue(read.promise);
+      host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
+      const upload = deferred<ReturnType<typeof shared>>(); host.rpc.mockReturnValue(upload.promise);
+      const { button, click } = await mountPopover();
+      expect(button('更多分享方式 First').disabled).toBe(true);
+      await act(async () => read.resolve({ epoch: version.epoch, window: { maxSeq: 10 } }));
+      expect(button('更多分享方式 First').disabled).toBe(false);
+      await click('更多分享方式 First'); await click('重新分享 First');
+      expect(button('更多分享方式 First').disabled).toBe(true);
+      await act(async () => new Promise(done => setTimeout(done, 180)));
+      expect(button('重新加密分享 First')).toBeNull();
+      await act(async () => upload.resolve(shared('b')));
+    });
   });
   it('does not offer a stale selectable URL after a clipboard failure and a new message', async () => {
     const live = timeline(); host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });

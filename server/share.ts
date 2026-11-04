@@ -1,9 +1,12 @@
 import { execFile } from 'node:child_process';
+import { randomInt } from 'node:crypto';
 import { URL } from 'node:url';
 import { toShare } from '../shared/convert';
+import { lockContent } from '../shared/encryption';
 import { MAX_SHARE_BYTES, SHARE_FILENAME, ShareError, isObject, type SessionMetadata, type ShareDocument } from '../shared/format';
 import { readSnapshot, type Refetch } from '../shared/snapshot';
 import { DEFAULT_VIEWER_URL, type ShareLink, type SharedSnapshot } from '../shared/plugin';
+import { filePasswordStore, type PasswordStore } from './passwords';
 
 export interface ShareSettings { viewerUrl?: string }
 export interface ShareSource { session: SessionMetadata; refetch: Refetch }
@@ -21,7 +24,9 @@ const messages = {
 };
 
 const GIST_DESCRIPTION = 'Chat-Share snapshot';
+const GIST_LOCKED = 'locked';
 const GIST_PAGE_SIZE = 100;
+const savedPasswords = filePasswordStore();
 const GITHUB_LOGIN = /^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i, GIST_ID = /^[a-f\d]{20,40}$/i;
 
 /** Never propagate execFile's error: it can contain stdout/stderr credentials. */
@@ -69,11 +74,11 @@ async function withGitHubTimeout<T>(run: (signal: AbortSignal) => Promise<T>): P
 
 /** Only this server module sends credentials and content to GitHub. No automatic POST retry. */
 export async function uploadShare(share: ShareDocument, settings: ShareSettings, dependencies: {
-  fetch?: typeof fetch; readGh?: () => Promise<string>;
-} = {}): Promise<SharedSnapshot> {
+  fetch?: typeof fetch; readGh?: () => Promise<string>; passwords?: PasswordStore;
+} = {}, password?: string): Promise<SharedSnapshot> {
   const viewer = viewerBase(settings.viewerUrl);
-  const content = JSON.stringify(share), bytes = Buffer.byteLength(content, 'utf8');
-  if (bytes > MAX_SHARE_BYTES) throw new ShareFailure(`会话过大：${bytes.toLocaleString('zh-CN')} 字节；上限为 10,000,000 字节。`);
+  const serialized = JSON.stringify(share), content = password ? await lockContent(serialized, password) : serialized, bytes = Buffer.byteLength(content, 'utf8');
+  if (bytes > MAX_SHARE_BYTES) throw new ShareFailure(`${password ? '会话加密后过大' : '会话过大'}：${bytes.toLocaleString('zh-CN')} 字节；上限为 10,000,000 字节。`);
   const token = await resolveToken(dependencies.readGh);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
@@ -84,7 +89,7 @@ export async function uploadShare(share: ShareDocument, settings: ShareSettings,
       method: 'POST', redirect: 'error', signal: controller.signal,
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' },
       body: JSON.stringify({ public: false,
-        description: `${GIST_DESCRIPTION} ${share.session.id} ${encodeURIComponent(share.snapshot.epoch)} ${share.snapshot.window.maxSeq}`,
+        description: `${GIST_DESCRIPTION} ${share.session.id} ${encodeURIComponent(share.snapshot.epoch)} ${share.snapshot.window.maxSeq}${password ? ` ${GIST_LOCKED}` : ''}`,
         files: { [SHARE_FILENAME]: { content } } }),
     });
     if (response.ok) value = await response.json();
@@ -111,7 +116,11 @@ export async function uploadShare(share: ShareDocument, settings: ShareSettings,
     throw new ShareFailure(messages.network);
   }
   viewer.hash = `${value.owner.login}/${value.id}`;
-  return { url: viewer.href, version: { epoch: share.snapshot.epoch, maxSeq: share.snapshot.window.maxSeq } };
+  const shared: SharedSnapshot = { url: viewer.href, version: { epoch: share.snapshot.epoch, maxSeq: share.snapshot.window.maxSeq } };
+  if (!password) return shared;
+  // The link already exists and works; losing this copy only means re-sharing after a restart.
+  await (dependencies.passwords ?? savedPasswords).save(value.id, password).catch(() => console.error('保存分享密码失败。'));
+  return { ...shared, locked: true, password };
 }
 
 interface ShareGist { id: string; login: string; createdAt: string; description: string }
@@ -126,15 +135,15 @@ function asShareGist(gist: unknown): ShareGist | undefined {
 }
 
 /** Legacy Gists carry a bare description, so they have no agent or version. */
-function parseDescription(description: string): { agentId: string; version: SharedSnapshot['version'] } | undefined {
+function parseDescription(description: string): { agentId: string; version: SharedSnapshot['version']; locked: boolean } | undefined {
   const parts = description.slice(GIST_DESCRIPTION.length + 1).split(' ');
-  if (parts.length !== 3) return undefined;
+  if (parts.length !== 3 && !(parts.length === 4 && parts[3] === GIST_LOCKED)) return undefined;
   const [agentId, encodedEpoch, seq] = parts as [string, string, string];
   const maxSeq = Number(seq);
   if (!agentId || !encodedEpoch || !/^\d+$/.test(seq) || !Number.isSafeInteger(maxSeq)) return undefined;
   try {
     const epoch = decodeURIComponent(encodedEpoch);
-    return epoch ? { agentId, version: { epoch, maxSeq } } : undefined;
+    return epoch ? { agentId, version: { epoch, maxSeq }, locked: parts.length === 4 } : undefined;
   } catch { return undefined; }
 }
 
@@ -169,13 +178,18 @@ function viewerLink(viewer: URL, gist: ShareGist): string {
 /** GitHub is the record of what is shared, so a Gist deleted to revoke its link stops being offered. */
 export async function listShareLinks(settings: ShareSettings, dependencies: Parameters<typeof uploadShare>[2] = {}): Promise<Record<string, SharedSnapshot>> {
   const viewer = viewerBase(settings.viewerUrl);
-  const newest = new Map<string, { createdAt: string; share: SharedSnapshot }>();
+  const newest = new Map<string, { createdAt: string; gistId: string; locked: boolean; share: SharedSnapshot }>();
   for (const gist of await listShareGists(dependencies)) {
     const parsed = parseDescription(gist.description);
     if (!parsed || (newest.get(parsed.agentId)?.createdAt ?? '') >= gist.createdAt) continue;
-    newest.set(parsed.agentId, { createdAt: gist.createdAt, share: { url: viewerLink(viewer, gist), version: parsed.version } });
+    newest.set(parsed.agentId, { createdAt: gist.createdAt, gistId: gist.id, locked: parsed.locked, share: { url: viewerLink(viewer, gist), version: parsed.version } });
   }
-  return Object.fromEntries([...newest].map(([agentId, { share }]) => [agentId, share]));
+  const found = [...newest];
+  const passwords = found.some(([, { locked }]) => locked) ? await (dependencies.passwords ?? savedPasswords).read().catch(() => ({} as Record<string, string>)) : {};
+  return Object.fromEntries(found.map(([agentId, { gistId, locked, share }]) => {
+    const password = passwords[gistId];
+    return [agentId, locked ? { ...share, locked: true as const, ...(password ? { password } : {}) } : share];
+  }));
 }
 
 /** Every live link, newest first. Unlike listShareLinks, a re-shared conversation keeps its older, still readable links. */
@@ -213,7 +227,7 @@ export async function deleteShareLink(gistId: string, dependencies: Parameters<t
   });
 }
 
-export async function shareSession(settings: ShareSettings, source: () => Promise<ShareSource>, dependencies: Parameters<typeof uploadShare>[2] = {}): Promise<SharedSnapshot> {
+export async function shareSession(settings: ShareSettings, source: () => Promise<ShareSource>, dependencies: Parameters<typeof uploadShare>[2] = {}, locked = false): Promise<SharedSnapshot> {
   viewerBase(settings.viewerUrl);
   let share: ShareDocument;
   try {
@@ -226,5 +240,5 @@ export async function shareSession(settings: ShareSettings, source: () => Promis
     }
     throw new ShareFailure(messages.snapshot);
   }
-  return uploadShare(share, settings, dependencies);
+  return uploadShare(share, settings, dependencies, locked ? String(randomInt(1_000_000)).padStart(6, '0') : undefined);
 }

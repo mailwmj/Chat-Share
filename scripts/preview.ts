@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { maliciousShare, designShare, benchmarkShare } from '../tests/fixtures';
+import { lockContent } from '../shared/encryption';
 import { MAX_SHARE_BYTES } from '../shared/format';
 
 const dist = resolve('viewer/dist'), local = resolve('.local');
@@ -15,7 +16,9 @@ const headers = Object.fromEntries(headerText.split('\n').filter(line => /^  [\w
 const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.json': 'application/json' };
 const gid = '00000000000000000000000000000001';
 const raw = `https://gist.githubusercontent.com/local-preview/${gid}/raw/chat-share.json`;
-const allowed = new Set(['design', 'malicious', 'claude', 'codex', 'invalid', 'oversized', 'deleted', 'failure', 'benchmark']);
+const allowed = new Set(['design', 'locked', 'malicious', 'claude', 'codex', 'invalid', 'oversized', 'deleted', 'failure', 'benchmark']);
+// Encrypted once, like a Gist: its content does not change between page loads.
+let lockedPreview: string | undefined;
 const server = createServer(async (request, response) => {
   for (const [name, value] of Object.entries(headers)) response.setHeader(name, value);
   response.setHeader('Cache-Control', 'no-store');
@@ -30,6 +33,7 @@ const server = createServer(async (request, response) => {
       if (!allowed.has(name)) { response.writeHead(404); response.end(); return; }
       let payload: string, status = 200, declared: number | undefined;
       if (name === 'design') payload = JSON.stringify(designShare());
+      else if (name === 'locked') payload = lockedPreview ??= await lockContent(JSON.stringify(designShare()), '482913');
       else if (name === 'malicious') payload = JSON.stringify(maliciousShare());
       else if (name === 'benchmark') payload = JSON.stringify(benchmarkShare());
       else if (name === 'invalid') payload = '{"version":9000}';

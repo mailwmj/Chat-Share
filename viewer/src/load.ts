@@ -1,12 +1,13 @@
-import { MAX_SHARE_BYTES, SHARE_FILENAME, ShareError, parseShare, type ShareDocument } from '../../shared/format';
+import { MAX_SHARE_BYTES, SHARE_FILENAME, ShareError, parseStoredShare, type LockedShare, type ShareDocument } from '../../shared/format';
 
 export function rawUrl(fragment: string): string {
-  const match = /^#([a-z\d](?:[a-z\d-]{0,37}[a-z\d])?)\/([a-f\d]{20,40})$/i.exec(fragment);
+  // The tail tolerates a copied "链接\n密码：123456" pasted whole into the address bar, which may join the lines.
+  const match = /^#([a-z\d](?:[a-z\d-]{0,37}[a-z\d])?)\/([a-f\d]{20,40})(?:(?:%20|%0A|%0D|%E5%AF%86%E7%A0%81).*)?$/i.exec(fragment);
   if (!match) throw new ShareError('invalid');
   return `https://gist.githubusercontent.com/${match[1]}/${match[2]}/raw/${SHARE_FILENAME}`;
 }
 
-export async function loadShare(fragment: string, signal?: AbortSignal): Promise<ShareDocument> {
+export async function loadShare(fragment: string, signal?: AbortSignal): Promise<ShareDocument | LockedShare> {
   let response: Response;
   try { response = await fetch(rawUrl(fragment), { credentials: 'omit', mode: 'cors', signal }); }
   catch (error) {
@@ -33,5 +34,5 @@ export async function loadShare(fragment: string, signal?: AbortSignal): Promise
     if (error instanceof ShareError || (error instanceof Error && error.name === 'AbortError')) throw error;
     throw new ShareError(error instanceof TypeError ? 'invalid' : 'load');
   } finally { reader.releaseLock(); }
-  return parseShare(text);
+  return parseStoredShare(text);
 }

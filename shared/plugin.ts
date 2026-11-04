@@ -1,5 +1,6 @@
 import { defineRpc, defineSettings } from '@getpaseo/plugin';
 import { z } from 'zod';
+import { SHARE_PASSWORD } from './format';
 
 export const DEFAULT_VIEWER_URL = 'https://chat-share.pages.dev';
 
@@ -19,12 +20,16 @@ export const preferences = defineSettings({
 });
 
 const shareVersion = z.object({ epoch: z.string().min(1), maxSeq: z.number().int().nonnegative() });
-const sharedSnapshot = z.object({ url: z.string().url(), version: shareVersion });
+const sharedSnapshot = z.object({
+  url: z.string().url(), version: shareVersion,
+  // A locked link can lack its password: it was made on another machine or the saved file is gone.
+  locked: z.literal(true).optional(), password: z.string().regex(SHARE_PASSWORD).optional(),
+});
 export type SharedSnapshot = z.infer<typeof sharedSnapshot>;
 
 export const shareAgent = defineRpc({
   name: 'share-agent',
-  input: z.object({ agentId: z.string().min(1) }),
+  input: z.object({ agentId: z.string().min(1), locked: z.literal(true).optional() }),
   output: z.union([sharedSnapshot, z.object({ error: z.string() })]),
 });
 

@@ -14,7 +14,17 @@ paseo plugin install /absolute/path/to/Chat-Share
 
 The server uses `gh auth token` for authentication. To use a custom viewer, open **Settings → Plugins → Chat-Share → 会话分享**, enter **查看器 URL**, and save. Leaving or clearing it uses the production default.
 
-Use **分享** in any workspace header (or **··· → 分享会话** in compact layouts). The popover lists non-archived agents, newest first, with their provider marks and a separate action on each row. **分享** creates and copies a snapshot link. While the conversation matches that snapshot, the action becomes **复制链接**. New content or a history reset replaces it with **重新分享** and hides the old copy action. Regeneration creates a new snapshot; existing links keep their original content. If copying fails, the current link is shown for manual selection. To revoke links, use **管理分享链接** at the bottom of the popover: it lists every Chat-Share link of the `gh` account, newest first, for multi-select deletion, which cannot be undone. Deleting the Gist on GitHub also works. Either way, cached raw content can remain readable for about five minutes.
+Use **分享** in any workspace header (or **··· → 分享会话** in compact layouts). The popover lists non-archived agents, in tab order, with their provider marks and a separate action on each row. **分享** creates and copies a snapshot link. While the conversation matches that snapshot, the action becomes **复制链接**, with **重新分享** and **重新加密分享** in the menu beside it. New content or a history reset returns the action to sharing and hides the old copy action. Sharing again creates a new snapshot; existing links keep their original content. If copying fails, the current link is shown for manual selection. Use **管理分享链接** to delete links, or delete the Gist on GitHub; cached raw content can remain readable for about five minutes.
+
+**加密分享**, in the same menu, encrypts the snapshot with a generated 6-digit password, and copying then includes the password under the link. The reader enters it before seeing anything, including the title. A conversation shared this way stays encrypted when shared again unless **分享** is chosen from the menu, and each new share gets a new password.
+
+This keeps the content unreadable on GitHub and from anyone who only has the link. It is not strong protection:
+
+- Anyone who receives the copied link and password together can read the conversation, so remove the password line and send it separately if that matters.
+- There is no server to limit attempts, so someone with the link can try all one million codes offline: about 50 hours on one CPU core, and likely minutes on a GPU. Do not rely on it for secrets.
+- Encrypting a conversation does not affect earlier plaintext links; delete those Gists on GitHub.
+
+The daemon saves each password as plaintext in `share-passwords.json` under `$PASEO_HOME/plugin-data/chat-share/` (default `~/.paseo`), readable only by its owner, so copying still works after a restart. On a machine without it, the link cannot be copied and the action becomes **加密分享**.
 
 ## Run
 

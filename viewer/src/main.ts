@@ -1,9 +1,10 @@
 import './style.css';
-import { ShareError, type ShareDocument, type TimelineEntry } from '../../shared/format';
+import { decodeBytes, deriveShareKey, encodeBytes, openLockedShare, passwordDigits } from '../../shared/encryption';
+import { ShareError, type LockedShare, type ShareDocument, type TimelineEntry } from '../../shared/format';
 import { downloadMarkdown } from '../../shared/download';
 import { browserLocale, messages } from './i18n';
 import { element, renderTimeline, createIcon } from './render';
-import { loadShare } from './load';
+import { loadShare, rawUrl } from './load';
 
 const locale = browserLocale(navigator.languages), t = messages[locale];
 document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en';
@@ -478,13 +479,66 @@ function showState(message: string, retry = false): void {
   app.replaceChildren(header, state);
 }
 
+function showLock(locked: LockedShare, keyName: string, signal: AbortSignal): void {
+  document.title = 'Chat-Share';
+  const header = element('header', 'toolbar'), inner = element('div', 'toolbar-inner');
+  inner.append(element('h1', '', t.title)); header.append(inner);
+  const state = element('main', 'state lock'), label = element('label', 'lock-prompt'), input = element('input', 'lock-input');
+  const note = element('p', 'lock-note');
+  note.setAttribute('role', 'status');
+  input.type = 'text'; input.inputMode = 'numeric'; input.autocomplete = 'off'; input.spellcheck = false;
+  async function unlock(): Promise<void> {
+    const password = input.value;
+    input.disabled = true; note.classList.remove('error'); note.textContent = t.unlocking;
+    try {
+      const key = await deriveShareKey(password, locked.kdf.salt);
+      const share = await openLockedShare(locked, key);
+      if (signal.aborted) return;
+      // Refreshing this tab should not ask again. Closing it forgets the key; the password itself is never stored.
+      try { sessionStorage.setItem(keyName, encodeBytes(key)); } catch { /* private mode */ }
+      showShare(share);
+    } catch (error) {
+      if (signal.aborted) return;
+      if (!(error instanceof ShareError) || error.code !== 'password') { showState(error instanceof ShareError && error.code === 'invalid' ? t.invalid : t.load); return; }
+      input.disabled = false; input.value = ''; note.classList.add('error'); note.textContent = t.wrongPassword;
+      input.focus();
+    }
+  }
+  input.addEventListener('input', () => {
+    input.value = passwordDigits(input.value);
+    if (input.value.length === 6) void unlock();
+  });
+  label.append(element('span', '', t.passwordPrompt), input);
+  state.append(label, note);
+  app.replaceChildren(header, state);
+  input.focus();
+}
+
+async function showLocked(locked: LockedShare, signal: AbortSignal): Promise<void> {
+  if (!globalThis.crypto?.subtle) { showState(t.insecure); return; }
+  const keyName = `chat-share-key:${rawUrl(location.hash)}`;
+  try {
+    const saved = sessionStorage.getItem(keyName);
+    if (saved) {
+      const share = await openLockedShare(locked, decodeBytes(saved));
+      if (!signal.aborted) showShare(share);
+      return;
+    }
+  } catch { /* No usable saved key: ask for the password. */ }
+  if (!signal.aborted) showLock(locked, keyName, signal);
+}
+
 async function load(): Promise<void> {
   loading?.abort(); loading = new AbortController();
   const signal = loading.signal;
   if (!location.hash) { showState(t.missing); return; }
   showState(t.loading);
-  try { const share = await loadShare(location.hash, signal); if (!signal.aborted) showShare(share); }
-  catch (error) {
+  try {
+    const share = await loadShare(location.hash, signal);
+    if (signal.aborted) return;
+    if (share.version === 2) await showLocked(share, signal);
+    else showShare(share);
+  } catch (error) {
     if (signal.aborted) return;
     const key = error instanceof ShareError ? error.code : 'load';
     const text = key === 'not-found' ? t.notFound : key === 'oversized' ? t.oversized : key === 'invalid' ? t.invalid : t.load;

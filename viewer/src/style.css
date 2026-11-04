@@ -690,6 +690,31 @@ pre code {
   border-color: var(--line);
   margin-top: 12px;
 }
+.state.lock { text-align: center; }
+.lock-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: var(--ink);
+}
+.lock-input {
+  width: 12em;
+  height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3em;
+  text-align: center;
+}
+.lock-input:focus { outline: 2px solid var(--link); outline-offset: -1px; }
+.lock-input:disabled { color: var(--muted); }
+.lock-note { min-height: 1.8em; margin: 12px 0 0; }
+.lock-note.error { color: var(--negative); }
 .empty { color: var(--muted); }
 
 /* Syntax highlighting tokens */

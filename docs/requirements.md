@@ -9,12 +9,13 @@
 | 项目 | 决定 |
 |---|---|
 | 入口 | workspace 顶部工具栏右侧的按钮（`addHeaderButton`，`popover`），窄窗口时收进 workspace 菜单（文档所述，待用户确认）；面板列出当前 workspace 的 agent |
-| 操作 | 安装后在 workspace 的分享面板点一个 agent 就立即上传，并把链接复制到剪贴板，没有二次确认 |
+| 操作 | 安装后在 workspace 的分享面板点一个 agent 就立即上传，并把链接复制到剪贴板，没有二次确认；主按钮右侧的菜单提供另一种分享模式 |
 | 范围 | 单个 agent 点击那一刻的整个会话，支持 Claude Code 和 Codex；再次分享生成新链接 |
 | 内容 | Paseo 时间线的全部条目，保留原始字段；本地图片（`file:`、`data:`）换成一行标记，`http(s)` 图片保留；子代理保持时间线原样，不去取子会话过程 |
-| 保护 | 不加密、不扫描敏感信息，有链接就能读全文（用户的明确决定） |
+| 保护 | 默认不加密、不扫描敏感信息，有链接就能读全文（用户的明确决定） |
+| 加密分享 | 用户可选（2026-11-04 确认）。密码由系统生成 6 位数字，不能修改，复制时和链接一起复制。Gist 中只有密文，标题也加密。没有服务端限制尝试次数，只防顺手打开和只拿到链接的人，防不住离线穷举，也防不住连密码一起转发 |
 | 存储 | GitHub secret Gist，仅通过服务器上的 `gh auth token` 认证；需安装 GitHub CLI 并运行 `gh auth login` 登录、授权创建 Gist |
-| 有效期 | 长期有效，发送方在分享面板底部的「管理分享链接」或到 GitHub 删除 Gist 来撤回；删除后链接约 5 分钟才失效，已下载或已打开的副本不受影响 |
+| 有效期 | 长期有效，发送方在分享面板底部的「管理分享链接」或到 GitHub 删除 Gist 来撤回；删除后链接约 5 分钟才失效，已下载或已打开的副本不受影响。明文改为加密时旧链接仍可打开，需要手动删除 |
 | 管理 | 浮层列出当前 `gh` 账号下所有 Chat-Share 链接，不分 workspace，每个链接一行，从新到旧；支持多选批量删除，删除前需确认，且无法恢复。服务端删除前会再次核对 Gist 符合 Chat-Share 的格式（secret、含 `chat-share.json`、描述前缀匹配）；GitHub 不记录创建来源，手工仿造的同格式 Gist 无法区分。 |
 | 上限 | 10 MB（10,000,000 字节）；超过就显示大小并报错，绝不悄悄丢内容 |
 | 查看器 | 默认 `https://chat-share.pages.dev`；插件设置可覆盖地址，留空或清空恢复默认 |
@@ -86,5 +87,6 @@
 
 - 按钮：`addHeaderButton({ id, workspaceId, button })`，只绑定 workspace。`copyText` 只能写剪贴板。`useToast()` 是 hook，要在组件内调用。
 - 客户端代码不能 import `node:`，网络调用和凭据放在服务端处理器。插件设置是明文 JSON。
+- SDK 没有给插件的存储接口，服务端也不能写设置。加密分享的密码由 daemon 存在 `$PASEO_HOME/plugin-data/chat-share/share-passwords.json`（`0600`），取不到时只能重新加密分享，不复制缺少密码的链接。
 - 本地安装和重载：`paseo plugin install <路径> --json`、`paseo plugin reload <id> --json`（实测）。
 - 参考实现：`github.com/talongao/paseo-threadshare` 及其服务仓库（MIT），借鉴代码要保留许可声明。
