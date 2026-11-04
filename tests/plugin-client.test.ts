@@ -21,7 +21,7 @@ vi.mock('@getpaseo/plugin/client/ui', async () => {
       createElement('div', null, data.map(item => createElement('div', { key: keyExtractor(item) }, renderItem({ item }) as never))),
     Modal: Object.assign(({ open, onOpenChange, children }: { open: boolean; onOpenChange(open: boolean): void; children: unknown }) =>
       open ? createElement('section', null, createElement('button', { 'aria-label': '关闭浮层', onClick: () => onOpenChange(false) }), children as never) : null,
-      { Content: ({ children }: { children: unknown }) => createElement('div', null, children as never) }),
+      { Content: ({ children, scrollable }: { children: unknown; scrollable?: boolean }) => createElement('div', { 'data-scrollable': String(scrollable) }, children as never) }),
   };
 });
 vi.mock('react-native', async () => {
@@ -37,7 +37,7 @@ vi.mock('react-native', async () => {
     AccessibilityInfo: { isReduceMotionEnabled: async () => false, addEventListener: () => ({ remove: () => {} }) },
     Animated: { View, Value: class { setValue() {} interpolate() { return this; } }, timing: finish, loop: finish },
     Easing: { linear: (t: number) => t, bezier: () => (t: number) => t, out: (f: unknown) => f, back: () => (t: number) => t },
-    Platform: { OS: 'web' },
+    Platform: { OS: 'web' }, useWindowDimensions: () => ({ width: 1280, height: 800 }),
   };
 });
 
@@ -128,14 +128,14 @@ function timeline(maxSeq = 10, epoch = version.epoch) {
     stop,
   };
 }
-async function mountPopover(entries: Array<ReturnType<typeof agent> & { archivedAt?: string }> = [agent()], Content = createSharePopover()) {
+async function mountPopover(entries: Array<ReturnType<typeof agent> & { archivedAt?: string }> = [agent()], Content = createSharePopover(), compact = false) {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const dir = directory(); host.list.mockResolvedValue(dir);
   if (!host.lookup.getMockImplementation()) host.lookup.mockResolvedValue({ links: {} });
   if (!host.timeline.getMockImplementation()) host.timeline.mockReturnValue(timeline());
   const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
   await act(async () => root!.render(createElement(Content,
-    { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps)));
+    { workspaceId: 'current', theme: { colors: {} }, layout: { compact, platform: 'web' } } as PluginButtonContentProps)));
   await act(async () => dir.snapshot({ entries: entries.map(agent => ({ agent })) }));
   const button = (label: string) => node.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
   const click = async (label: string) => { await act(async () => button(label).click()); };
@@ -480,7 +480,41 @@ describe('managing share links', () => {
     const { node, button } = await open();
     expect(host.list.mock.lastCall![0].filter).toEqual({ includeArchived: true, includeBackground: true });
     expect(Array.from(node.querySelectorAll('button[aria-label^="选择"]')).map(row => row.getAttribute('aria-label'))).toEqual([rows.a, rows.b, rows.c]);
-    expect(button('删除').disabled).toBe(true);
+    expect(button('删除')).toBeNull();
+  });
+  it('hugs a short list in the wide dialog, and keeps the bounded body only in the compact sheet', async () => {
+    const wide = await open();
+    expect(wide.node.querySelector('[data-scrollable]')!.getAttribute('data-scrollable')).toBe('true');
+    await act(async () => root!.unmount()); root = undefined;
+    host.listAll.mockResolvedValue({ links });
+    const sheet = await mountPopover([agent()], createSharePopover(), true);
+    host.list.mockResolvedValue({ entries: [], pageInfo: { nextCursor: null } });
+    await sheet.click('更多分享方式 First');
+    await sheet.click('管理分享链接');
+    expect(sheet.node.querySelector('[data-scrollable]')!.getAttribute('data-scrollable')).toBe('false');
+  });
+  it('holds the layout with placeholders until the links arrive', async () => {
+    const pending = deferred<{ links: typeof links }>();
+    const { node, button } = await open(pending.promise);
+    expect(node.querySelector('[aria-label="正在读取…"]')).not.toBeNull();
+    expect(button('全选')).toBeNull();
+    await act(async () => pending.resolve({ links }));
+    expect(node.querySelector('[aria-label="正在读取…"]')).toBeNull();
+    expect(button(rows.a)).not.toBeNull();
+  });
+  it('states the count in English and offers Delete only for a selection', async () => {
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('en-US');
+    host.listAll.mockResolvedValue({ links: [links[0]] });
+    const { node, button, click } = await mountPopover();
+    host.list.mockResolvedValue({ entries: [], pageInfo: { nextCursor: null } });
+    await click('More sharing options for First');
+    await click('Manage share links');
+    expect(node.textContent).toContain('1 link');
+    expect(node.textContent).not.toContain('1 links');
+    expect(button('Delete 1')).toBeNull();
+    await click('Select all');
+    expect(node.textContent).toContain('1 of 1 selected');
+    expect(button('Delete 1')).not.toBeNull();
   });
   it('still lists links under the fallback title when the directory cannot be read', async () => {
     host.listAll.mockResolvedValue({ links: [links[0]] });
@@ -509,15 +543,19 @@ describe('managing share links', () => {
     expect(button('全选')).toBeNull();
   });
   it('selects and clears all, and reports a partial selection', async () => {
-    const { button, click } = await open();
+    const { node, button, click } = await open();
+    expect(node.textContent).toContain('3 个链接');
     await click(rows.a);
     expect(button('全选').getAttribute('aria-checked')).toBe('mixed');
+    expect(node.textContent).toContain('已选 1/3');
     expect(button('删除 1 个')).not.toBeNull();
     await click('全选');
     expect(button(rows.c).getAttribute('aria-checked')).toBe('true');
     expect(button('删除 3 个')).not.toBeNull();
     await click('全选');
     expect(button(rows.a).getAttribute('aria-checked')).toBe('false');
+    expect(node.textContent).toContain('3 个链接');
+    expect(button('删除 3 个')).toBeNull();
   });
   it('deletes nothing until confirmed, and cancelling keeps the selection', async () => {
     const { node, button, click } = await open();
