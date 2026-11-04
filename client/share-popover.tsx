@@ -63,26 +63,6 @@ function usePresence(open: boolean, exitMs: number) {
   return open || mounted;
 }
 
-/** Eases its height to fit the content; the first measure lands without motion so a reopened panel is already whole. */
-function Collapse({ open, still, children }: { open: boolean; still: boolean; children: ReactNode }) {
-  const height = useRef(new Animated.Value(0)).current;
-  const natural = useRef<number | null>(null);
-  const kept = useRef(children);
-  if (open) kept.current = children;
-  const present = usePresence(open, still ? 0 : 160);
-  const opacity = useTween(open ? 1 : 0, open ? 140 : 100, still, { delay: open ? 60 : 0 });
-  const ease = (toValue: number) => Animated.timing(height, { toValue, duration: still ? 0 : open ? 200 : 160, easing: settle, useNativeDriver: false }).start();
-  useEffect(() => { if (natural.current !== null) ease(open ? natural.current : 0); }, [open]);
-  return <Animated.View style={{ height, overflow: 'hidden' }}>
-    <Animated.View style={{ position: 'absolute', top: 0, left: 0, right: 0, opacity }} onLayout={({ nativeEvent }) => {
-      const measured = nativeEvent.layout.height;
-      if (natural.current === null) height.setValue(open ? measured : 0);
-      else if (open && measured !== natural.current) ease(measured);
-      natural.current = measured;
-    }}>{present ? kept.current : null}</Animated.View>
-  </Animated.View>;
-}
-
 function FadeIn({ still, delay = 0, children }: { still: boolean; delay?: number; children: ReactNode }) {
   const opacity = useTween(1, 160, still, { from: 0, delay });
   return <Animated.View style={{ opacity }}>{children}</Animated.View>;
@@ -208,15 +188,9 @@ function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, v
       <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: colors.foreground, fontSize: 14, lineHeight: 18 }}>{title}</Text>
       <ShareAction colors={colors} height={actionHeight} still={still} phase={currentPhase} title={title} onPress={() => { if (shared && fresh === true) onCopy(shared.url); else onShare(); }} />
     </View>
-    <Collapse open={!!error} still={still}>
-      <Text accessibilityRole="alert" style={{ ...textInset, color: colors.statusDanger }}>{error}</Text>
-    </Collapse>
-    <Collapse open={failed && !error} still={still}>
-      <Text style={{ ...textInset, color: colors.foregroundMuted }}>无法确认快照是否最新，请重新生成分享。</Text>
-    </Collapse>
-    <Collapse open={copyFailed && fresh === true} still={still}>
-      <Text selectable style={{ ...textInset, color: colors.foreground }}>{shared?.url}</Text>
-    </Collapse>
+    {!!error && <Text accessibilityRole="alert" style={{ ...textInset, color: colors.statusDanger }}>{error}</Text>}
+    {failed && !error && <Text style={{ ...textInset, color: colors.foregroundMuted }}>无法确认快照是否最新，请重新生成分享。</Text>}
+    {copyFailed && fresh === true && <Text selectable style={{ ...textInset, color: colors.foreground }}>{shared?.url}</Text>}
   </View>;
 }
 
@@ -282,10 +256,25 @@ function createShareStore() {
   };
 }
 
+const AGENT_FILTER = { includeArchived: false, includeBackground: true };
+// Plugins cannot read the host's tab layout; creation order is the closest stable match.
+const tabOrder = (entries: PaseoAgent[]) => entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+
+export async function listAllAgents(paseo: PluginClientContext['paseo']) {
+  const agents: PaseoAgent[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await paseo.agents.list({ filter: AGENT_FILTER, page: { limit: 200, cursor } });
+    agents.push(...page.entries.map(({ agent }) => agent));
+    cursor = page.pageInfo.nextCursor ?? undefined;
+  } while (cursor);
+  return agents;
+}
+
 type LookupLinks = () => Promise<{ links: Record<string, SharedSnapshot> } | { error: string }>;
 
 /** An installation keeps uploads, known links, rows and checks across popover closes and workspace switches. */
-export function createSharePopover(preload?: LookupLinks) {
+export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => Promise<PaseoAgent[]>) {
   const store = createShareStore();
   const agentsByWorkspace = new Map<string, PaseoAgent[]>();
   const verdicts: Verdicts = new WeakMap();
@@ -302,6 +291,12 @@ export function createSharePopover(preload?: LookupLinks) {
   if (preload) void refreshLinks(preload);
   // A listing already under way may have read a Gist that has since been deleted, so look again once it ends.
   const refreshAfterDelete = (lookup: LookupLinks) => void Promise.resolve(lookingUp).then(() => refreshLinks(lookup));
+  // Known rows make the first open full height at once. A failed preload just means loading on open.
+  void preloadAgents?.().then(agents => {
+    const grouped = new Map<string, PaseoAgent[]>();
+    for (const agent of agents) if (agent.workspaceId && !agent.archivedAt) grouped.set(agent.workspaceId, [...grouped.get(agent.workspaceId) ?? [], agent]);
+    for (const [workspaceId, entries] of grouped) if (!agentsByWorkspace.has(workspaceId)) agentsByWorkspace.set(workspaceId, tabOrder(entries));
+  }, () => {});
   return function SharePopover({ workspaceId, theme, layout }: PluginButtonContentProps) {
     const paseo = usePaseo(), rpc = useRpc(shareAgent), lookup = useRpc(listShares), toast = useToast(), colors = theme.colors, still = useReducedMotion();
     const shares = useSyncExternalStore(store.subscribe, store.get);
@@ -320,8 +315,6 @@ export function createSharePopover(preload?: LookupLinks) {
       return () => { open.current = false; clearTimeout(copiedTimer.current); };
     }, []);
     useEffect(() => { if (agents) agentsByWorkspace.set(workspaceId, agents); }, [agents, workspaceId]);
-    // Plugins cannot read the host's tab layout; creation order is the closest stable match.
-    const tabOrder = (entries: PaseoAgent[]) => entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
     async function copy(agentId: string, url: string) {
       clearTimeout(copiedTimer.current);
       try {
@@ -351,7 +344,7 @@ export function createSharePopover(preload?: LookupLinks) {
     }
     useEffect(() => {
       return observeDirectory(
-        (cursor, subscribe) => paseo.agents.list({ filter: { includeArchived: false, includeBackground: true }, page: { limit: 200, cursor }, ...(subscribe ? { subscribe: {} } : {}) }),
+        (cursor, subscribe) => paseo.agents.list({ filter: AGENT_FILTER, page: { limit: 200, cursor }, ...(subscribe ? { subscribe: {} } : {}) }),
         {
             snapshot: entries => {
               setAgents(tabOrder(entries.map(({ agent }) => agent).filter(agent => agent.workspaceId === workspaceId && !agent.archivedAt)));
@@ -383,15 +376,14 @@ export function createSharePopover(preload?: LookupLinks) {
           <Text style={{ color: colors.foreground, fontSize: 13 }}>重试</Text>
         </Pressable>
       </View>}
-      <Collapse open still={still}>
-        {listFailed ? <Text style={{ ...message, color: colors.statusDanger }}>读取会话失败，请重新打开。</Text>
-          : agents === null ? <SkeletonRows colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} />
-          : agents.length === 0 ? <Text style={{ ...message, color: colors.foregroundMuted }}>暂无会话</Text>
-          : <FadeIn still={still || reopened}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false}>{agents.map(agent =>
-            <AgentRow key={agent.id} agent={agent} colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} phase={phaseOf(agent.id)}
-              shared={shares.links[agent.id]} verdicts={verdicts} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id}
-              onShare={() => void share(agent.id)} onCopy={url => void copy(agent.id, url)} />)}</ScrollView></FadeIn>}
-      </Collapse>
+      {/* In normal flow, never animating height: the host's scroll viewport follows content height a frame late, and each overflow shows a scrollbar that widens the surface. */}
+      {listFailed ? <Text style={{ ...message, color: colors.statusDanger }}>读取会话失败，请重新打开。</Text>
+        : agents === null ? <SkeletonRows colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} />
+        : agents.length === 0 ? <Text style={{ ...message, color: colors.foregroundMuted }}>暂无会话</Text>
+        : <FadeIn still={still || reopened}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false}>{agents.map(agent =>
+          <AgentRow key={agent.id} agent={agent} colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} phase={phaseOf(agent.id)}
+            shared={shares.links[agent.id]} verdicts={verdicts} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id}
+            onShare={() => void share(agent.id)} onCopy={url => void copy(agent.id, url)} />)}</ScrollView></FadeIn>}
       <Pressable accessibilityRole="button" accessibilityLabel="管理分享链接" onPress={() => setManaging(true)}
         style={{ minHeight: layout.compact ? rowHeight : FOOTER_HEIGHT, marginTop: 4, borderTopWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
         <Icon name="Link" size={14} color={colors.foregroundMuted} />
