@@ -121,8 +121,12 @@ function CheckMark({ colors, still }: { colors: Colors; still: boolean }) {
   return <Animated.View style={{ transform: [{ scale }] }}><Icon name="Check" size={14} color={colors.statusSuccess} /></Animated.View>;
 }
 
-function ShareAction({ colors, height, still, phase, title, onPress }: { colors: Colors; height: number; still: boolean; phase: Phase; title: string; onPress(): void }) {
+function ShareAction({ colors, height, still: reduced, phase, title, onPress }: { colors: Colors; height: number; still: boolean; phase: Phase; title: string; onPress(): void }) {
   const [hovered, setHovered] = useState(false), [down, setDown] = useState(false);
+  // The opening state appears at once; only later state changes animate.
+  const [entered, setEntered] = useState(false);
+  useEffect(() => setEntered(true), []);
+  const still = reduced || !entered;
   const disabled = phase === 'checking' || phase === 'pending';
   useEffect(() => { if (disabled) { setHovered(false); setDown(false); } }, [disabled]);
   // An unshared row stays an outline; a filled action means this conversation already has a link.
@@ -150,45 +154,50 @@ function ShareAction({ colors, height, still, phase, title, onPress }: { colors:
   </Animated.View>;
 }
 
+/** The last check of each link, shown on reopen while a new check runs. */
+type Verdicts = WeakMap<SharedSnapshot, boolean>;
+
 /** Compare canonical content, rather than updatedAt (which also changes for titles and settings). */
-function useSnapshotFreshness(agentId: string, shared?: SharedSnapshot) {
+function useSnapshotFreshness(agentId: string, shared: SharedSnapshot | undefined, verdicts: Verdicts) {
   const paseo = usePaseo();
   const [result, setResult] = useState<{ shared: SharedSnapshot; fresh: boolean }>();
   const [failed, setFailed] = useState(false);
   useEffect(() => {
+    setFailed(false);
     if (!shared) return;
     const version = shared.version, timeline = paseo.agents.ref(agentId).timeline;
     let live = true, changed = false;
-    setFailed(false);
-    const stale = () => { changed = true; if (live) setResult({ shared, fresh: false }); };
+    const decide = (fresh: boolean) => { verdicts.set(shared, fresh); if (live) setResult({ shared, fresh }); };
+    const stale = () => { changed = true; decide(false); };
+    const unavailable = () => { verdicts.delete(shared); if (live) { setResult(undefined); setFailed(true); } };
     const refresh = async () => {
       try {
         const page = await timeline.refetch({ direction: 'tail', limit: 1, projection: 'projected' });
         if (!live || changed) return;
         if (page.error || page.reset || page.gap || page.staleCursor) throw new Error('Unavailable timeline');
         setFailed(false);
-        setResult({ shared, fresh: page.epoch === version.epoch && page.window.maxSeq === version.maxSeq });
-      } catch { if (live) { setResult(undefined); setFailed(true); } }
+        decide(page.epoch === version.epoch && page.window.maxSeq === version.maxSeq);
+      } catch { unavailable(); }
     };
     const stop = timeline.subscribe(message => {
       if (!live) return;
       if (message.event.type === 'replacement') stale();
-      else if (message.event.type === 'subscription_restored') { if (!changed) { setResult(undefined); void refresh(); } }
-      else if (message.event.type === 'error') { setResult(undefined); setFailed(true); }
+      else if (message.event.type === 'subscription_restored') { if (!changed) { verdicts.delete(shared); setResult(undefined); void refresh(); } }
+      else if (message.event.type === 'error') unavailable();
       else if ('seq' in message && message.seq !== undefined
         && (message.epoch !== version.epoch || message.seq > version.maxSeq)) stale();
     });
-    void stop.ready.then(refresh, () => { if (live) setFailed(true); });
+    void stop.ready.then(refresh, unavailable);
     return () => { live = false; stop(); };
   }, [paseo, agentId, shared]);
-  return { fresh: result?.shared === shared ? result?.fresh : undefined, failed };
+  return { fresh: result?.shared === shared ? result?.fresh : shared && verdicts.get(shared), failed };
 }
 
-function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, error, copyFailed, onShare, onCopy }: {
-  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; error?: string; copyFailed: boolean; onShare(): void; onCopy(url: string): void;
+function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, verdicts, error, copyFailed, onShare, onCopy }: {
+  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; verdicts: Verdicts; error?: string; copyFailed: boolean; onShare(): void; onCopy(url: string): void;
 }) {
   const title = agent.title || '未命名会话';
-  const { fresh, failed } = useSnapshotFreshness(agent.id, shared);
+  const { fresh, failed } = useSnapshotFreshness(agent.id, shared, verdicts);
   let currentPhase = phase;
   if (shared && phase !== 'pending') currentPhase = fresh === true ? phase : fresh === false || failed ? 'stale' : 'checking';
   const textInset = { paddingLeft: 32, paddingRight: 8, paddingBottom: 8, fontSize: 13, lineHeight: 18 };
@@ -248,7 +257,13 @@ function createShareStore() {
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     lookup() { created = {}; set({ lookupError: undefined }); return ++lookupId; },
     checked(id: number, links: Record<string, SharedSnapshot>) {
-      if (id === lookupId) set({ checked: true, lookupError: undefined, links: { ...links, ...created } });
+      if (id !== lookupId) return;
+      // An unchanged link keeps its identity, so a background lookup does not restart its row's check.
+      const merged = Object.entries({ ...links, ...created }).map(([agentId, link]) => {
+        const known = state.links[agentId];
+        return [agentId, known?.url === link.url && known.version.epoch === link.version.epoch && known.version.maxSeq === link.version.maxSeq ? known : link];
+      });
+      set({ checked: true, lookupError: undefined, links: Object.fromEntries(merged) });
     },
     lookupFailed(id: number, message: string) { if (id === lookupId) set({ lookupError: message }); },
     /** False when this agent is already uploading. */
@@ -266,32 +281,43 @@ function createShareStore() {
   };
 }
 
-/** An installation keeps uploads and known links across popover closes and workspace switches. */
-export function createSharePopover() {
+type LookupLinks = () => Promise<{ links: Record<string, SharedSnapshot> } | { error: string }>;
+
+/** An installation keeps uploads, known links, rows and checks across popover closes and workspace switches. */
+export function createSharePopover(preload?: LookupLinks) {
   const store = createShareStore();
+  const agentsByWorkspace = new Map<string, PaseoAgent[]>();
+  const verdicts: Verdicts = new WeakMap();
+  // One lookup at a time: opening during another must not restart a slow GitHub listing.
+  let lookingUp: Promise<void> | undefined;
+  const refreshLinks = (lookup: LookupLinks) => lookingUp ??= (async () => {
+    const id = store.lookup();
+    try {
+      const result = await lookup();
+      if ('error' in result) store.lookupFailed(id, result.error);
+      else store.checked(id, result.links);
+    } catch { store.lookupFailed(id, '读取分享链接失败，请稍后重试。'); }
+  })().finally(() => { lookingUp = undefined; });
+  if (preload) void refreshLinks(preload);
   return function SharePopover({ workspaceId, theme, layout }: PluginButtonContentProps) {
     const paseo = usePaseo(), rpc = useRpc(shareAgent), lookup = useRpc(listShares), toast = useToast(), colors = theme.colors, still = useReducedMotion();
     const shares = useSyncExternalStore(store.subscribe, store.get);
-    const [agents, setAgents] = useState<PaseoAgent[] | null>(null);
+    const [agents, setAgents] = useState<PaseoAgent[] | null>(() => agentsByWorkspace.get(workspaceId) ?? null);
+    const reopened = useRef(agents !== null).current;
     const [listFailed, setListFailed] = useState(false);
     const [copied, setCopied] = useState<string | null>(null);
     const [copyFailed, setCopyFailed] = useState<string | null>(null);
     const copiedTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
     const open = useRef(false);
-    async function refreshLinks() {
-      const id = store.lookup();
-      try {
-        const result = await lookup({});
-        if ('error' in result) store.lookupFailed(id, result.error);
-        else store.checked(id, result.links);
-      } catch { store.lookupFailed(id, '读取分享链接失败，请稍后重试。'); }
-    }
+    const refresh = () => void refreshLinks(() => lookup({}));
     useEffect(() => {
       open.current = true;
-      void refreshLinks();
+      refresh();
       return () => { open.current = false; clearTimeout(copiedTimer.current); };
     }, []);
-    const recentFirst = (entries: PaseoAgent[]) => entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
+    useEffect(() => { if (agents) agentsByWorkspace.set(workspaceId, agents); }, [agents, workspaceId]);
+    // Plugins cannot read the host's tab layout; creation order is the closest stable match.
+    const tabOrder = (entries: PaseoAgent[]) => entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
     async function copy(agentId: string, url: string) {
       clearTimeout(copiedTimer.current);
       try {
@@ -324,7 +350,7 @@ export function createSharePopover() {
         (cursor, subscribe) => paseo.agents.list({ filter: { includeArchived: false, includeBackground: true }, page: { limit: 200, cursor }, ...(subscribe ? { subscribe: {} } : {}) }),
         {
             snapshot: entries => {
-              setAgents(recentFirst(entries.map(({ agent }) => agent).filter(agent => agent.workspaceId === workspaceId && !agent.archivedAt)));
+              setAgents(tabOrder(entries.map(({ agent }) => agent).filter(agent => agent.workspaceId === workspaceId && !agent.archivedAt)));
               setListFailed(false);
             },
             update: message => {
@@ -334,7 +360,7 @@ export function createSharePopover() {
                 const id = update.kind === 'upsert' ? update.agent.id : update.agentId;
                 const remaining = (current ?? []).filter(agent => agent.id !== id);
                 if (update.kind === 'upsert' && update.agent.workspaceId === workspaceId && !update.agent.archivedAt) remaining.push(update.agent);
-                return recentFirst(remaining);
+                return tabOrder(remaining);
               });
             },
             error: () => setListFailed(true),
@@ -349,7 +375,7 @@ export function createSharePopover() {
     return <View style={{ margin: -8, ...(layout.compact ? {} : { width: PANEL_WIDTH }) }}>
       {shares.lookupError && <View style={{ padding: 8, gap: 4 }}>
         <Text accessibilityRole="alert" style={{ color: colors.statusDanger, fontSize: 13, lineHeight: 18 }}>{shares.lookupError}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel="重试读取分享链接" onPress={() => void refreshLinks()} style={{ minHeight: actionHeight, justifyContent: 'center' }}>
+        <Pressable accessibilityRole="button" accessibilityLabel="重试读取分享链接" onPress={refresh} style={{ minHeight: actionHeight, justifyContent: 'center' }}>
           <Text style={{ color: colors.foreground, fontSize: 13 }}>重试</Text>
         </Pressable>
       </View>}
@@ -357,9 +383,9 @@ export function createSharePopover() {
         {listFailed ? <Text style={{ ...message, color: colors.statusDanger }}>读取会话失败，请重新打开。</Text>
           : agents === null ? <SkeletonRows colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} />
           : agents.length === 0 ? <Text style={{ ...message, color: colors.foregroundMuted }}>暂无会话</Text>
-          : <FadeIn still={still}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false}>{agents.map(agent =>
+          : <FadeIn still={still || reopened}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false}>{agents.map(agent =>
             <AgentRow key={agent.id} agent={agent} colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} phase={phaseOf(agent.id)}
-              shared={shares.links[agent.id]} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id}
+              shared={shares.links[agent.id]} verdicts={verdicts} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id}
               onShare={() => void share(agent.id)} onCopy={url => void copy(agent.id, url)} />)}</ScrollView></FadeIn>}
       </Collapse>
     </View>;

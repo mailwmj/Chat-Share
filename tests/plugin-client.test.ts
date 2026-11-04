@@ -108,7 +108,7 @@ describe('complete directory observation', () => {
 
 const version = { epoch: 'timeline-1', maxSeq: 10 };
 const shared = (id = 'a', maxSeq = 10) => ({ url: `https://viewer.example/#synthetic/${id.repeat(32)}`, version: { ...version, maxSeq } });
-const agent = (id = 'a', title = 'First', updatedAt = '2026-11-03T10:00:00Z') => ({ id, title, provider: 'codex', workspaceId: 'current', updatedAt });
+const agent = (id = 'a', title = 'First', updatedAt = '2026-11-03T10:00:00Z', createdAt = '2026-11-01T10:00:00Z') => ({ id, title, provider: 'codex', workspaceId: 'current', updatedAt, createdAt });
 
 function timeline(maxSeq = 10, epoch = version.epoch) {
   let listener: (event: unknown) => void;
@@ -172,12 +172,59 @@ describe('share popover', () => {
     expect(node.textContent).not.toContain(shared().url);
     await act(async () => second.resolve(shared('b')));
   });
-  it('orders agents newest first in both the snapshot and live updates', async () => {
-    const { node, dir } = await mountPopover([agent('old', 'Older', '2026-11-03T08:00:00Z'), agent('new', 'Newer', '2026-11-03T09:00:00Z')]);
+  it('orders agents by creation like the tab strip, and activity does not move them', async () => {
+    const { node, dir } = await mountPopover([agent('new', 'Newer', '2026-11-03T08:00:00Z', '2026-11-02T00:00:00Z'), agent('old', 'Older', '2026-11-03T09:00:00Z', '2026-11-01T00:00:00Z')]);
     const titles = () => Array.from(node.querySelectorAll('button')).map(button => button.getAttribute('aria-label'));
-    expect(titles()).toEqual(['分享 Newer', '分享 Older']);
-    await act(async () => dir.update({ type: 'agent_update', payload: { kind: 'upsert', agent: agent('old', 'Older', '2026-11-03T10:00:00Z') } }));
     expect(titles()).toEqual(['分享 Older', '分享 Newer']);
+    await act(async () => dir.update({ type: 'agent_update', payload: { kind: 'upsert', agent: agent('new', 'Newer', '2026-11-03T10:00:00Z', '2026-11-02T00:00:00Z') } }));
+    expect(titles()).toEqual(['分享 Older', '分享 Newer']);
+  });
+  it('reuses a preloaded lookup instead of waiting on a second one when opened during it', async () => {
+    const preload = deferred<{ links: Record<string, ReturnType<typeof shared>> }>();
+    const { button } = await mountPopover([agent()], createSharePopover(() => preload.promise));
+    expect(button('正在检查 First 的分享状态')).not.toBeNull();
+    expect(host.lookup).not.toHaveBeenCalled();
+    await act(async () => preload.resolve({ links: { a: shared() } }));
+    expect(button('复制 First 的链接')).not.toBeNull();
+  });
+  it('opens with a finished preload, then revalidates in the background', async () => {
+    const Content = createSharePopover(async () => ({ links: { a: shared() } })), lookup = deferred<{ links: object }>();
+    await Promise.resolve();
+    host.lookup.mockReturnValue(lookup.promise);
+    const live = timeline(); host.timeline.mockReturnValue(live);
+    const { button } = await mountPopover([agent()], Content);
+    expect(host.lookup).toHaveBeenCalledOnce();
+    expect(button('复制 First 的链接')).not.toBeNull();
+    await act(async () => lookup.resolve({ links: {} }));
+    expect(button('分享 First')).not.toBeNull();
+  });
+  it('reopens with the last rows and check, and an unchanged lookup does not restart the check', async () => {
+    const live = timeline(); host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
+    const Content = createSharePopover();
+    await mountPopover([agent()], Content);
+    await act(async () => root!.unmount()); root = undefined;
+    const lookup = deferred<{ links: object }>(), read = deferred<unknown>();
+    host.lookup.mockReturnValue(lookup.promise); live.refetch.mockReturnValue(read.promise); live.refetch.mockClear();
+    host.list.mockReturnValue(new Promise(() => {}));
+    const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
+    await act(async () => root!.render(createElement(Content, { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps)));
+    const button = (label: string) => node.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+    expect(button('复制 First 的链接')).not.toBeNull();
+    await act(async () => lookup.resolve({ links: { a: shared() } }));
+    expect(live.refetch).toHaveBeenCalledOnce();
+    await act(async () => read.resolve({ epoch: version.epoch, window: { maxSeq: 11 } }));
+    expect(button('复制 First 的链接')).toBeNull();
+    expect(button('重新生成 First 的分享')).not.toBeNull();
+  });
+  it('withdraws a remembered copy action when the check on reopen fails', async () => {
+    const live = timeline(); host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
+    const Content = createSharePopover();
+    await mountPopover([agent()], Content);
+    await act(async () => root!.unmount()); root = undefined;
+    live.refetch.mockRejectedValue(new Error('offline'));
+    const { node, button } = await mountPopover([agent()], Content);
+    expect(button('复制 First 的链接')).toBeNull();
+    expect(node.textContent).toContain('无法确认快照是否最新');
   });
   it('copies an existing snapshot, ignores title changes, and replaces copying with regeneration when content arrives', async () => {
     const live = timeline(); host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
@@ -239,6 +286,18 @@ describe('share popover', () => {
     expect(button('复制 First 的链接')).toBeNull();
     expect(button('重新生成 First 的分享')).not.toBeNull();
     expect(node.textContent).toContain('无法确认快照是否最新');
+  });
+  it('drops the unverifiable message when a lookup removes the link', async () => {
+    const live = timeline(); live.refetch.mockRejectedValue(new Error('offline')); host.timeline.mockReturnValue(live);
+    const Content = createSharePopover(async () => ({ links: { a: shared() } })), lookup = deferred<{ links: object }>();
+    await Promise.resolve();
+    host.lookup.mockReturnValue(lookup.promise);
+    const { node, button } = await mountPopover([agent()], Content);
+    expect(node.textContent).toContain('无法确认快照是否最新');
+    await act(async () => lookup.resolve({ links: {} }));
+    await act(async () => new Promise(done => setTimeout(done, 180)));
+    expect(button('分享 First')).not.toBeNull();
+    expect(node.textContent).not.toContain('无法确认快照是否最新');
   });
   it('keeps an upload across closing and reopening without copying over the clipboard while closed', async () => {
     const Content = createSharePopover(), upload = deferred<ReturnType<typeof shared>>(); host.rpc.mockReturnValue(upload.promise);
