@@ -9,7 +9,7 @@ export function registerHeaders(client: PluginClientContext, Content: ComponentT
   const add = (id: string) => {
     if (lifetime.signal.aborted || buttons.has(id)) return;
     buttons.set(id, client.addHeaderButton({ id: 'share', workspaceId: id,
-      button: { title: '分享会话', icon: 'Share', label: '分享', behavior: { kind: 'popover', Content } } }));
+      button: { title: '分享会话', icon: 'Share', behavior: { kind: 'popover', Content } } }));
   };
   const stop = observeDirectory(
     (cursor, subscribe) => client.paseo.workspaces.list({ includeBackground: true, page: { limit: 200, cursor }, ...(subscribe ? { subscribe: {} } : {}) }),
