@@ -19,7 +19,7 @@ const fill = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as c
 const COPIED_MS = 1600;
 // The host caps a popover surface at 420 x 440, with 12px of padding this panel pulls back by 8px.
 const PANEL_WIDTH = 404, FOOTER_HEIGHT = 36, LIST_MAX_HEIGHT = 416 - FOOTER_HEIGHT - 1;
-const ACTION_WIDTH = 88, ACTION_GAP = 2, SWEEP_WIDTH = 36;
+const ACTION_WIDTH = 88, ACTION_GAP = 0, SWEEP_WIDTH = 36;
 
 const shareText = (shared: SharedSnapshot) => shared.locked && shared.password ? `${shared.url}\n密码：${shared.password}` : shared.url;
 
@@ -123,7 +123,7 @@ function ShareAction({ colors, height, still: reduced, phase, locked, title, onP
   return <Animated.View style={{ transform: [{ scale }] }}>
     <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled, busy: phase === 'pending' }} disabled={disabled} onPress={onPress}
       onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)} onPressIn={() => setDown(true)} onPressOut={() => setDown(false)}
-      style={{ width: ACTION_WIDTH, height, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: filled ? 'transparent' : colors.border }}>
+      style={{ width: ACTION_WIDTH, height, overflow: 'hidden' }}>
       <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash }} />
       <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.foreground, opacity: lift }} />
       {sweep && <Sweep colors={colors} still={still} />}
@@ -181,14 +181,12 @@ function MenuToggle({ colors, size, still, disabled, open, title, onPress }: { c
   useEffect(() => { if (disabled) setHovered(false); }, [disabled]);
   const wash = useTween(hovered || open ? 1 : 0, hovered ? 80 : 160, still);
   const opacity = useTween(disabled ? 0.4 : 1, 150, still);
-  const turn = useTween(open ? 1 : 0, 160, still);
-  const rotate = turn.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] });
   return <Animated.View style={{ opacity }}>
     <Pressable accessibilityRole="button" accessibilityLabel={`更多分享方式 ${title}`} accessibilityState={{ disabled, expanded: open }} disabled={disabled} onPress={onPress}
       onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
-      style={{ width: size, height: size, borderRadius: 6, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
+      style={{ width: size, height: size, borderLeftWidth: 1, borderColor: colors.border, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
       <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash }} />
-      <Animated.View style={{ transform: [{ rotate }] }}><Icon name="ChevronDown" size={14} color={colors.foregroundMuted} /></Animated.View>
+      <Icon name="Ellipsis" size={16} color={colors.foregroundMuted} />
     </Pressable>
   </Animated.View>;
 }
@@ -197,15 +195,18 @@ function MenuItem({ colors, height, still, label, title, onPress }: { colors: Co
   const [hovered, setHovered] = useState(false);
   const wash = useTween(hovered ? 1 : 0, hovered ? 80 : 160, still);
   return <Pressable accessibilityRole="button" accessibilityLabel={`${label} ${title}`} onPress={onPress} onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
-    style={{ width: ACTION_WIDTH + ACTION_GAP + height, height, borderRadius: 6, overflow: 'hidden', justifyContent: 'center', paddingHorizontal: 10 }}>
+    style={{ minWidth: ACTION_WIDTH + ACTION_GAP + height, height, borderRadius: 4, overflow: 'hidden', justifyContent: 'center', paddingHorizontal: 10 }}>
     <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash }} />
     <Label colors={colors}>{label}</Label>
   </Pressable>;
 }
 
+type MenuOption = { label: string; locked: boolean };
+
 function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, verdicts, error, copyFailed, menuOpen, onMenu, onShare, onCopy }: {
-  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; verdicts: Verdicts; error?: string; copyFailed: boolean; menuOpen: boolean; onMenu(): void; onShare(locked: boolean): void; onCopy(shared: SharedSnapshot): void;
+  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; verdicts: Verdicts; error?: string; copyFailed: boolean; menuOpen: boolean; onMenu(y: number, title: string, options: MenuOption[]): void; onShare(locked: boolean): void; onCopy(shared: SharedSnapshot): void;
 }) {
+  const rowY = useRef(0);
   const title = agent.title || '未命名会话';
   // A locked link is useless without its password, so it can only be replaced and needs no freshness check.
   const copyable = shared && (!shared.locked || shared.password) ? shared : undefined;
@@ -218,20 +219,15 @@ function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, v
     : [locked ? { label: '分享', locked: false } : { label: '加密分享', locked: true }];
   const busy = currentPhase === 'checking' || currentPhase === 'pending';
   const textInset = { paddingLeft: 32, paddingRight: 8, paddingBottom: 8, fontSize: 13, lineHeight: 18 };
-  return <View>
+  return <View onLayout={event => { rowY.current = event.nativeEvent.layout.y; }}>
     <View style={{ minHeight: height, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
       <View accessibilityRole="image" accessibilityLabel={agent.provider} style={{ width: 16, height: 16 }}><Icon {...providerIcon(agent.provider)} size={16} color={colors.foregroundMuted} /></View>
       <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: colors.foreground, fontSize: 14, lineHeight: 18 }}>{title}</Text>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: ACTION_GAP }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: 6, overflow: 'hidden' }}>
         <ShareAction colors={colors} height={actionHeight} still={still} phase={currentPhase} locked={locked} title={title} onPress={() => { if (copying && shared) onCopy(shared); else onShare(locked); }} />
-        <MenuToggle colors={colors} size={actionHeight} still={still} disabled={busy} open={menuOpen && !busy} title={title} onPress={onMenu} />
+        <MenuToggle colors={colors} size={actionHeight} still={still} disabled={busy} open={menuOpen && !busy} title={title} onPress={() => onMenu(rowY.current, title, menu)} />
       </View>
     </View>
-    {menuOpen && !busy && <>
-      <View style={{ alignItems: 'flex-end', gap: 2, paddingHorizontal: 8, paddingBottom: 4 }}>
-        {menu.map(item => <MenuItem key={item.label} colors={colors} height={actionHeight} still={still} label={item.label} title={title} onPress={() => onShare(item.locked)} />)}
-      </View>
-    </>}
     {!!error && <>
       <Text accessibilityRole="alert" style={{ ...textInset, color: colors.statusDanger }}>{error}</Text>
     </>}
@@ -355,10 +351,19 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
     const [listFailed, setListFailed] = useState(false);
     const [copied, setCopied] = useState<string | null>(null);
     const [copyFailed, setCopyFailed] = useState<string | null>(null);
-    const [menuAgent, setMenuAgent] = useState<string | null>(null);
+    const [menu, setMenu] = useState<{ agentId: string; title: string; options: MenuOption[]; y: number } | null>(null);
+    const [listY, setListY] = useState(0), [panelHeight, setPanelHeight] = useState(0);
+    const scrollY = useRef(0);
     const [managing, setManaging] = useState(false);
     const copiedTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
     const open = useRef(false);
+    useEffect(() => {
+      if (!menu || Platform.OS !== 'web') return;
+      const doc = (globalThis as unknown as { document: { addEventListener(type: string, listener: (event: { key: string; stopPropagation(): void }) => void): void; removeEventListener(type: string, listener: (event: { key: string; stopPropagation(): void }) => void): void } }).document;
+      const onKeyDown = (event: { key: string; stopPropagation(): void }) => { if (event.key === 'Escape') { event.stopPropagation(); setMenu(null); } };
+      doc.addEventListener('keydown', onKeyDown);
+      return () => doc.removeEventListener('keydown', onKeyDown);
+    }, [menu]);
     const refresh = () => void refreshLinks(() => lookup({}));
     useEffect(() => {
       open.current = true;
@@ -418,12 +423,16 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
         });
     }, [paseo, workspaceId]);
     const rowHeight = layout.compact ? 56 : 40, actionHeight = layout.compact ? 44 : 30;
+    const menuHeight = menu ? menu.options.length * actionHeight + 8 : 0;
+    const menuBelow = menu ? listY + menu.y - scrollY.current + (rowHeight + actionHeight) / 2 + 4 : 0;
+    const menuAbove = menu ? listY + menu.y - scrollY.current + (rowHeight - actionHeight) / 2 - menuHeight - 4 : 0;
+    const menuTop = menuBelow + menuHeight <= panelHeight || menuAbove < 0 ? menuBelow : menuAbove;
     const message = { paddingHorizontal: 8, paddingVertical: 8, fontSize: 13, lineHeight: 18 };
     const phaseOf = (agentId: string): Phase => shares.pending.has(agentId) ? 'pending'
       : copied === agentId ? 'copied'
       : shares.links[agentId] !== undefined ? 'copy'
       : shares.checked ? 'share' : 'checking';
-    return <View style={{ margin: -8, ...(layout.compact ? {} : { width: PANEL_WIDTH }) }}>
+    return <View onLayout={event => setPanelHeight(event.nativeEvent.layout.height)} style={{ margin: -8, ...(layout.compact ? {} : { width: PANEL_WIDTH }), ...(menu ? { minHeight: rowHeight + menuHeight + FOOTER_HEIGHT + 8 } : {}) }}>
       {shares.lookupError && <View style={{ padding: 8, gap: 4 }}>
         <Text accessibilityRole="alert" style={{ color: colors.statusDanger, fontSize: 13, lineHeight: 18 }}>{shares.lookupError}</Text>
         <Pressable accessibilityRole="button" accessibilityLabel="重试读取分享链接" onPress={refresh} style={{ minHeight: actionHeight, justifyContent: 'center' }}>
@@ -434,18 +443,24 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
       {listFailed ? <Text style={{ ...message, color: colors.statusDanger }}>读取会话失败，请重新打开。</Text>
           : agents === null ? <SkeletonRows colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} />
           : agents.length === 0 ? <Text style={{ ...message, color: colors.foregroundMuted }}>暂无会话</Text>
-          : <FadeIn still={still || reopened}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false}>{agents.map(agent =>
+          : <View onLayout={event => setListY(event.nativeEvent.layout.y)}><FadeIn still={still || reopened}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false} onScroll={event => { scrollY.current = event.nativeEvent.contentOffset.y; setMenu(null); }} scrollEventThrottle={16}>{agents.map(agent =>
             <AgentRow key={agent.id} agent={agent} colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} phase={phaseOf(agent.id)}
-              shared={shares.links[agent.id]} verdicts={verdicts} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id} menuOpen={menuAgent === agent.id}
-              onMenu={() => setMenuAgent(current => current === agent.id ? null : agent.id)}
-              onShare={locked => { setMenuAgent(null); void share(agent.id, locked); }}
-              onCopy={shared => { setMenuAgent(null); void copy(agent.id, shared); }} />)}</ScrollView></FadeIn>}
+              shared={shares.links[agent.id]} verdicts={verdicts} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id} menuOpen={menu?.agentId === agent.id}
+              onMenu={(y, title, options) => setMenu(current => current?.agentId === agent.id ? null : { agentId: agent.id, y, title, options })}
+              onShare={locked => { setMenu(null); void share(agent.id, locked); }}
+              onCopy={shared => { setMenu(null); void copy(agent.id, shared); }} />)}</ScrollView></FadeIn></View>}
       <Pressable accessibilityRole="button" accessibilityLabel="管理分享链接" onPress={() => setManaging(true)}
         style={{ minHeight: layout.compact ? rowHeight : FOOTER_HEIGHT, marginTop: 4, borderTopWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
         <Icon name="Link" size={14} color={colors.foregroundMuted} />
         <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 13, lineHeight: 16 }}>管理分享链接</Text>
       </Pressable>
       <ManageSharesModal open={managing} onOpenChange={setManaging} colors={colors} compact={layout.compact} onChanged={() => refreshAfterDelete(() => lookup({}))} />
+      {menu && <>
+        <Pressable accessibilityRole="button" accessibilityLabel="关闭分享菜单" onPress={() => setMenu(null)} style={fill} />
+        <View style={{ position: 'absolute', top: menuTop, right: 8, padding: 4, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 8 }}>
+          {menu.options.map(item => <MenuItem key={item.label} colors={colors} height={actionHeight} still={still} label={item.label} title={menu.title} onPress={() => { const id = menu.agentId; setMenu(null); void share(id, item.locked); }} />)}
+        </View>
+      </>}
     </View>;
   };
 }

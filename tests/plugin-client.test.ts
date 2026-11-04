@@ -142,6 +142,17 @@ async function mountPopover(entries: Array<ReturnType<typeof agent> & { archived
 }
 
 describe('share popover', () => {
+  it('dismisses the share menu without triggering a share', async () => {
+    const { node, click } = await mountPopover();
+    await click('更多分享方式 First');
+    expect(node.querySelector('[aria-label="加密分享 First"]')).not.toBeNull();
+    await click('关闭分享菜单');
+    expect(node.querySelector('[aria-label="加密分享 First"]')).toBeNull();
+    await click('更多分享方式 First');
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(node.querySelector('[aria-label="加密分享 First"]')).toBeNull();
+    expect(host.rpc).not.toHaveBeenCalled();
+  });
   it.each(['typed failure', 'wrapped transport failure'])('shows only a short message for a %s', async kind => {
     const short = '请在服务器安装 GitHub CLI（gh），并运行 gh auth login 登录。';
     if (kind === 'typed failure') host.rpc.mockResolvedValueOnce({ error: short });
