@@ -147,7 +147,10 @@ describe('share popover', () => {
     vi.spyOn(navigator, 'language', 'get').mockReturnValue('en-US');
     host.rpc.mockResolvedValue({ error: '分享失败，请稍后重试。' });
     const { button, click, node } = await mountPopover();
+    expect(button('Manage share links')).toBeNull();
+    await click('More sharing options for First');
     expect(button('Manage share links')).not.toBeNull();
+    await click('More sharing options for First');
     await click('Share First');
     expect(node.textContent).toContain('Sharing failed. Please try again.');
   });
@@ -463,6 +466,7 @@ describe('managing share links', () => {
     host.listAll.mockResolvedValue(listAll);
     const popover = await mountPopover();
     host.list.mockResolvedValue({ entries: [{ agent: agent() }, { agent: { ...agent('z', 'Archived'), archivedAt: 'yesterday' } }], pageInfo: { nextCursor: null } });
+    await popover.click('更多分享方式 First');
     await popover.click('管理分享链接');
     return popover;
   }
@@ -482,6 +486,7 @@ describe('managing share links', () => {
     host.listAll.mockResolvedValue({ links: [links[0]] });
     const { click, button } = await mountPopover();
     host.list.mockRejectedValue(new Error('offline'));
+    await click('更多分享方式 First');
     await click('管理分享链接');
     expect(button('选择 未命名会话 11月3日 10:00')).not.toBeNull();
   });
@@ -490,6 +495,7 @@ describe('managing share links', () => {
     const { click, button } = await mountPopover();
     host.list.mockResolvedValueOnce({ entries: [], pageInfo: { nextCursor: 'next' } })
       .mockResolvedValueOnce({ entries: [{ agent: agent('later', 'Later') }], pageInfo: { nextCursor: null } });
+    await click('更多分享方式 First');
     await click('管理分享链接');
     expect(button('选择 Later 10月28日 18:00')).not.toBeNull();
   });
@@ -588,7 +594,8 @@ describe('managing share links', () => {
       await click('删除 3 个'); await click('确认删除');
       expect(host.remove).toHaveBeenCalledOnce();
       await click('关闭浮层');
-      await click('管理分享链接');
+      await click('更多分享方式 First');
+    await click('管理分享链接');
       await act(async () => vi.advanceTimersByTimeAsync(5000));
       expect(host.remove).toHaveBeenCalledOnce();
       expect(button(rows.b).getAttribute('aria-checked')).toBe('false');

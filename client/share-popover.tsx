@@ -19,7 +19,7 @@ const nativeDriver = Platform.OS !== 'web';
 const fill = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as const;
 const COPIED_MS = 1600;
 // The host caps a popover surface at 420 x 440, with 12px of padding this panel pulls back by 8px.
-const PANEL_WIDTH = 404, FOOTER_HEIGHT = 36, LIST_MAX_HEIGHT = 416 - FOOTER_HEIGHT - 1;
+const PANEL_WIDTH = 404, LIST_MAX_HEIGHT = 416;
 const ACTION_WIDTH = 88, ACTION_GAP = 0, SWEEP_WIDTH = 36;
 
 const shareText = (shared: SharedSnapshot) => shared.locked && shared.password ? `${shared.url}\n${t('密码：', 'Password: ')}${shared.password}` : shared.url;
@@ -192,10 +192,10 @@ function MenuToggle({ colors, size, still, disabled, open, title, onPress }: { c
   </Animated.View>;
 }
 
-function MenuItem({ colors, height, still, label, title, onPress }: { colors: Colors; height: number; still: boolean; label: string; title: string; onPress(): void }) {
+function MenuItem({ colors, height, still, label, title, onPress }: { colors: Colors; height: number; still: boolean; label: string; title?: string; onPress(): void }) {
   const [hovered, setHovered] = useState(false);
   const wash = useTween(hovered ? 1 : 0, hovered ? 80 : 160, still);
-  return <Pressable accessibilityRole="button" accessibilityLabel={`${label} ${title}`} onPress={onPress} onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
+  return <Pressable accessibilityRole="button" accessibilityLabel={title ? `${label} ${title}` : label} onPress={onPress} onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
     style={{ minWidth: ACTION_WIDTH + ACTION_GAP + height, height, borderRadius: 4, overflow: 'hidden', justifyContent: 'center', paddingHorizontal: 10 }}>
     <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash }} />
     <Label colors={colors}>{label}</Label>
@@ -424,7 +424,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
         });
     }, [paseo, workspaceId]);
     const rowHeight = layout.compact ? 56 : 40, actionHeight = layout.compact ? 44 : 30;
-    const menuHeight = menu ? menu.options.length * actionHeight + 8 : 0;
+    const menuHeight = menu ? (menu.options.length + 1) * actionHeight + 9 : 0;
     const menuBelow = menu ? listY + menu.y - scrollY.current + (rowHeight + actionHeight) / 2 + 4 : 0;
     const menuAbove = menu ? listY + menu.y - scrollY.current + (rowHeight - actionHeight) / 2 - menuHeight - 4 : 0;
     const menuTop = menuBelow + menuHeight <= panelHeight || menuAbove < 0 ? menuBelow : menuAbove;
@@ -433,7 +433,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
       : copied === agentId ? 'copied'
       : shares.links[agentId] !== undefined ? 'copy'
       : shares.checked ? 'share' : 'checking';
-    return <View onLayout={event => setPanelHeight(event.nativeEvent.layout.height)} style={{ margin: -8, ...(layout.compact ? {} : { width: PANEL_WIDTH }), ...(menu ? { minHeight: rowHeight + menuHeight + FOOTER_HEIGHT + 8 } : {}) }}>
+    return <View onLayout={event => setPanelHeight(event.nativeEvent.layout.height)} style={{ margin: -8, ...(layout.compact ? {} : { width: PANEL_WIDTH }), ...(menu ? { minHeight: rowHeight + menuHeight + 8 } : {}) }}>
       {shares.lookupError && <View style={{ padding: 8, gap: 4 }}>
         <Text accessibilityRole="alert" style={{ color: colors.statusDanger, fontSize: 13, lineHeight: 18 }}>{shares.lookupError}</Text>
         <Pressable accessibilityRole="button" accessibilityLabel={t('重试读取分享链接', 'Retry loading share links')} onPress={refresh} style={{ minHeight: actionHeight, justifyContent: 'center' }}>
@@ -450,16 +450,17 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
               onMenu={(y, title, options) => setMenu(current => current?.agentId === agent.id ? null : { agentId: agent.id, y, title, options })}
               onShare={locked => { setMenu(null); void share(agent.id, locked); }}
               onCopy={shared => { setMenu(null); void copy(agent.id, shared); }} />)}</ScrollView></FadeIn></View>}
-      <Pressable accessibilityRole="button" accessibilityLabel={t('管理分享链接', 'Manage share links')} onPress={() => setManaging(true)}
-        style={{ minHeight: layout.compact ? rowHeight : FOOTER_HEIGHT, marginTop: 4, borderTopWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
-        <Icon name="Link" size={14} color={colors.foregroundMuted} />
+      {(listFailed || agents?.length === 0) && <Pressable accessibilityRole="button" accessibilityLabel={t('管理分享链接', 'Manage share links')} onPress={() => setManaging(true)}
+        style={{ minHeight: actionHeight, justifyContent: 'center', alignSelf: 'flex-start', paddingHorizontal: 8 }}>
         <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 13, lineHeight: 16 }}>{t('管理分享链接', 'Manage share links')}</Text>
-      </Pressable>
+      </Pressable>}
       <ManageSharesModal open={managing} onOpenChange={setManaging} colors={colors} compact={layout.compact} onChanged={() => refreshAfterDelete(() => lookup({}))} />
       {menu && <>
         <Pressable accessibilityRole="button" accessibilityLabel={t('关闭分享菜单', 'Close share menu')} onPress={() => setMenu(null)} style={fill} />
         <View style={{ position: 'absolute', top: menuTop, right: 8, padding: 4, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 8 }}>
           {menu.options.map(item => <MenuItem key={item.label} colors={colors} height={actionHeight} still={still} label={item.label} title={menu.title} onPress={() => { const id = menu.agentId; setMenu(null); void share(id, item.locked); }} />)}
+          <View style={{ height: 1, backgroundColor: colors.border }} />
+          <MenuItem colors={colors} height={actionHeight} still={still} label={t('管理分享链接', 'Manage share links')} onPress={() => { setMenu(null); setManaging(true); }} />
         </View>
       </>}
     </View>;
