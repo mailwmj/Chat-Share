@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import { useState } from 'react';
 import { Text } from 'react-native';
 import { useSettings, type PluginSurfaceProps } from '@getpaseo/plugin/client';
@@ -8,18 +9,18 @@ export function ShareSettings({ theme }: PluginSurfaceProps) {
   const settings = useSettings(preferences);
   const [draft, setDraft] = useState<{ viewerUrl: string; revision: string } | null>(null);
   const toast = useToast();
-  if (settings.status === 'loading') return <Text style={{ color: theme.colors.foreground }}>正在读取设置…</Text>;
-  if (settings.status !== 'ready') return <SettingsSection title="会话分享">
-    <SettingsAction label="读取设置失败" actionLabel="重新读取" onPress={() => void settings.reload()} />
+  if (settings.status === 'loading') return <Text style={{ color: theme.colors.foreground }}>{t('正在读取设置…', 'Loading settings…')}</Text>;
+  if (settings.status !== 'ready') return <SettingsSection title={t('会话分享', 'Conversation sharing')}>
+    <SettingsAction label={t('读取设置失败', 'Could not load settings')} actionLabel={t('重新读取', 'Reload')} onPress={() => void settings.reload()} />
   </SettingsSection>;
   const values = draft ?? { ...settings.values, revision: settings.revision };
   const edit = (patch: Partial<typeof values>) => setDraft({ ...values, ...patch });
-  return <SettingsSection title="会话分享"><SettingsCard key={values.revision}>
-    <SettingsInput label="查看器 URL" initialValue={values.viewerUrl} onChangeText={viewerUrl => edit({ viewerUrl })} />
-    <SettingsAction label={settings.saveError ? '保存失败，请检查地址或重新读取设置。' : ''} actionLabel={settings.saving ? '正在保存…' : '保存'} disabled={settings.saving}
+  return <SettingsSection title={t('会话分享', 'Conversation sharing')}><SettingsCard key={values.revision}>
+    <SettingsInput label={t('查看器 URL', 'Viewer URL')} initialValue={values.viewerUrl} onChangeText={viewerUrl => edit({ viewerUrl })} />
+    <SettingsAction label={settings.saveError ? t('保存失败，请检查地址或重新读取设置。', 'Save failed. Check the URL or reload settings.') : ''} actionLabel={settings.saving ? t('正在保存…', 'Saving…') : t('保存', 'Save')} disabled={settings.saving}
       onPress={() => void (async () => {
         if (await settings.save({ viewerUrl: values.viewerUrl }, values.revision)) {
-          setDraft(null); toast.show('设置已保存', { variant: 'success' });
+          setDraft(null); toast.show(t('设置已保存', 'Settings saved'), { variant: 'success' });
         }
       })()} />
   </SettingsCard></SettingsSection>;

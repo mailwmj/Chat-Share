@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { PluginButtonContentProps, PluginClientContext } from '@getpaseo/plugin/client';
@@ -54,7 +54,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 let root: Root | undefined;
-afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.replaceChildren(); vi.resetAllMocks(); });
+beforeEach(() => { vi.spyOn(navigator, 'language', 'get').mockReturnValue('zh-CN'); });
+afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.replaceChildren(); vi.restoreAllMocks(); vi.resetAllMocks(); });
 
 describe('header registration follows the workspace directory', () => {
   it('registers existing and later workspaces, removes archived ones, reconciles reconnects, and releases on cleanup', async () => {
@@ -142,6 +143,14 @@ async function mountPopover(entries: Array<ReturnType<typeof agent> & { archived
 }
 
 describe('share popover', () => {
+  it('shows English controls and translated server errors', async () => {
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('en-US');
+    host.rpc.mockResolvedValue({ error: '分享失败，请稍后重试。' });
+    const { button, click, node } = await mountPopover();
+    expect(button('Manage share links')).not.toBeNull();
+    await click('Share First');
+    expect(node.textContent).toContain('Sharing failed. Please try again.');
+  });
   it('dismisses the share menu without triggering a share', async () => {
     const { node, click } = await mountPopover();
     await click('更多分享方式 First');

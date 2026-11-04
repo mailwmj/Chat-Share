@@ -1,3 +1,4 @@
+import { t } from './i18n';
 import type { PluginClientContext, PluginButtonContentProps, PluginButtonRegistration } from '@getpaseo/plugin/client';
 import type { ComponentType } from 'react';
 import { observeDirectory } from './directory';
@@ -9,7 +10,7 @@ export function registerHeaders(client: PluginClientContext, Content: ComponentT
   const add = (id: string) => {
     if (lifetime.signal.aborted || buttons.has(id)) return;
     buttons.set(id, client.addHeaderButton({ id: 'share', workspaceId: id,
-      button: { title: '分享会话', icon: 'Share', behavior: { kind: 'popover', Content } } }));
+      button: { title: t('分享会话', 'Share conversation'), icon: 'Share', behavior: { kind: 'popover', Content } } }));
   };
   const stop = observeDirectory(
     (cursor, subscribe) => client.paseo.workspaces.list({ includeBackground: true, page: { limit: 200, cursor }, ...(subscribe ? { subscribe: {} } : {}) }),

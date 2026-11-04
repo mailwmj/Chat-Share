@@ -21,7 +21,7 @@
 | 查看器 | 默认 `https://chat-share.pages.dev`；插件设置可覆盖地址，留空或清空恢复默认 |
 | 链接 | `https://<查看器>.pages.dev/#<GitHub用户名>/<gistID>`，浏览器直接读 Gist raw 地址，不走 GitHub API |
 | 发布 | 先通过 `paseo plugin install github:…` 在团队内试用，稳定后再提交 paseo.sh |
-| 语言 | 查看器跟随浏览器语言，插件面板用中文 |
+| 语言 | 查看器和插件面板跟随客户端语言，支持简体中文和英文，其他语言默认英文 |
 | 许可 | MIT，Copyright (c) 2026 mailwmj，见根目录 `LICENSE` |
 
 ### 查看器
