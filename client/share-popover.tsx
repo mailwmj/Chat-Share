@@ -7,6 +7,7 @@ import { listShares, shareAgent, type SharedSnapshot } from '../shared/plugin';
 import { observeDirectory } from './directory';
 import { ManageSharesModal } from './manage-shares';
 import { providerIcon } from './provider-icons';
+import { visibleRange } from './web';
 
 type AgentDirectory = Awaited<ReturnType<PluginClientContext['paseo']['agents']['list']>>;
 type PaseoAgent = AgentDirectory['entries'][number]['agent'];
@@ -20,7 +21,7 @@ const fill = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as c
 const COPIED_MS = 1600;
 // The host caps a popover surface at 420 x 440, with 12px of padding this panel pulls back by 8px.
 const PANEL_WIDTH = 404, LIST_MAX_HEIGHT = 416;
-const ACTION_WIDTH = 88, ACTION_GAP = 0, SWEEP_WIDTH = 36;
+const ACTION_WIDTH = 76, ACTION_GAP = 0, SWEEP_WIDTH = 36;
 
 const shareText = (shared: SharedSnapshot) => shared.locked && shared.password ? `${shared.url}\n${t('密码：', 'Password: ')}${shared.password}` : shared.url;
 
@@ -353,6 +354,8 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
     const [copied, setCopied] = useState<string | null>(null);
     const [copyFailed, setCopyFailed] = useState<string | null>(null);
     const [menu, setMenu] = useState<{ agentId: string; title: string; options: MenuOption[]; y: number } | null>(null);
+    const panelRef = useRef<View>(null);
+    const [bounds, setBounds] = useState<{ top: number; bottom: number }>();
     const [listY, setListY] = useState(0), [panelHeight, setPanelHeight] = useState(0);
     const scrollY = useRef(0);
     const [managing, setManaging] = useState(false);
@@ -423,17 +426,19 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
             error: () => setListFailed(true),
         });
     }, [paseo, workspaceId]);
-    const rowHeight = layout.compact ? 56 : 40, actionHeight = layout.compact ? 44 : 30;
+    const rowHeight = layout.compact ? 56 : 40, actionHeight = layout.compact ? 44 : 28;
     const menuHeight = menu ? (menu.options.length + 1) * actionHeight + 9 : 0;
     const menuBelow = menu ? listY + menu.y - scrollY.current + (rowHeight + actionHeight) / 2 + 4 : 0;
     const menuAbove = menu ? listY + menu.y - scrollY.current + (rowHeight - actionHeight) / 2 - menuHeight - 4 : 0;
-    const menuTop = menuBelow + menuHeight <= panelHeight || menuAbove < 0 ? menuBelow : menuAbove;
+    const visibleTop = Math.max(0, bounds?.top ?? 0), visibleBottom = Math.min(panelHeight, bounds?.bottom ?? panelHeight);
+    const preferredTop = menuBelow + menuHeight <= visibleBottom || menuAbove < visibleTop ? menuBelow : menuAbove;
+    const menuTop = Math.max(visibleTop, Math.min(preferredTop, visibleBottom - menuHeight));
     const message = { paddingHorizontal: 8, paddingVertical: 8, fontSize: 13, lineHeight: 18 };
     const phaseOf = (agentId: string): Phase => shares.pending.has(agentId) ? 'pending'
       : copied === agentId ? 'copied'
       : shares.links[agentId] !== undefined ? 'copy'
       : shares.checked ? 'share' : 'checking';
-    return <View onLayout={event => setPanelHeight(event.nativeEvent.layout.height)} style={{ margin: -8, ...(layout.compact ? {} : { width: PANEL_WIDTH }), ...(menu ? { minHeight: rowHeight + menuHeight + 8 } : {}) }}>
+    return <View ref={panelRef} onLayout={event => setPanelHeight(event.nativeEvent.layout.height)} style={{ margin: -8, ...(layout.compact ? {} : { width: PANEL_WIDTH }), ...(menu ? { minHeight: rowHeight + menuHeight + 8 } : {}) }}>
       {shares.lookupError && <View style={{ padding: 8, gap: 4 }}>
         <Text accessibilityRole="alert" style={{ color: colors.statusDanger, fontSize: 13, lineHeight: 18 }}>{shares.lookupError}</Text>
         <Pressable accessibilityRole="button" accessibilityLabel={t('重试读取分享链接', 'Retry loading share links')} onPress={refresh} style={{ minHeight: actionHeight, justifyContent: 'center' }}>
@@ -447,7 +452,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
           : <View onLayout={event => setListY(event.nativeEvent.layout.y)}><FadeIn still={still || reopened}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false} onScroll={event => { scrollY.current = event.nativeEvent.contentOffset.y; setMenu(null); }} scrollEventThrottle={16}>{agents.map(agent =>
             <AgentRow key={agent.id} agent={agent} colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} phase={phaseOf(agent.id)}
               shared={shares.links[agent.id]} verdicts={verdicts} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id} menuOpen={menu?.agentId === agent.id}
-              onMenu={(y, title, options) => setMenu(current => current?.agentId === agent.id ? null : { agentId: agent.id, y, title, options })}
+              onMenu={(y, title, options) => { setBounds(visibleRange(panelRef.current)); setMenu(current => current?.agentId === agent.id ? null : { agentId: agent.id, y, title, options }); }}
               onShare={locked => { setMenu(null); void share(agent.id, locked); }}
               onCopy={shared => { setMenu(null); void copy(agent.id, shared); }} />)}</ScrollView></FadeIn></View>}
       {(listFailed || agents?.length === 0) && <Pressable accessibilityRole="button" accessibilityLabel={t('管理分享链接', 'Manage share links')} onPress={() => setManaging(true)}
