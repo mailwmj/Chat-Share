@@ -57,19 +57,22 @@ export function createOutline(timeline: HTMLElement, toolbar: HTMLElement, t: Tr
   function showPreview(index: number, keyboard = false): void {
     clearTimeout(openTimer);
     clearTimeout(closeTimer);
+    // The marker reacts immediately; only the first text preview waits to avoid accidental popups.
+    if (previewIndex !== undefined) {
+      buttons[previewIndex]!.classList.remove('is-previewed');
+      buttons[previewIndex]!.removeAttribute('aria-describedby');
+    }
+    previewIndex = index;
+    nav.dataset.previewInput = keyboard ? 'keyboard' : 'pointer';
+    const button = buttons[index]!;
+    button.classList.add('is-previewed');
     const show = () => {
       const alreadyOpen = preview.matches(':popover-open');
-      if (previewIndex !== undefined) {
-        buttons[previewIndex]!.classList.remove('is-previewed');
-        buttons[previewIndex]!.removeAttribute('aria-describedby');
-      }
-      previewIndex = index;
       previewText.textContent = snippets[index]!;
       preview.classList.toggle('instant', keyboard || alreadyOpen);
-      const button = buttons[index]!;
       // Keep the last anchor during the exit fade so the preview cannot jump to the window corner.
       list.querySelector('.preview-anchor')?.classList.remove('preview-anchor');
-      button.classList.add('is-previewed', 'preview-anchor');
+      button.classList.add('preview-anchor');
       button.setAttribute('aria-describedby', preview.id);
       if (!alreadyOpen) preview.showPopover();
     };
@@ -94,7 +97,9 @@ export function createOutline(timeline: HTMLElement, toolbar: HTMLElement, t: Tr
     button.addEventListener('pointerenter', () => {
       if (pointer.matches) showPreview(index);
     });
-    button.addEventListener('focus', () => showPreview(index, true));
+    button.addEventListener('focus', () => {
+      if (button.matches(':focus-visible')) showPreview(index, true);
+    });
     button.addEventListener('click', () => {
       closePreview();
       message.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });

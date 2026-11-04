@@ -367,6 +367,43 @@ test('outline shows a readable user-only preview that stays open under the point
   expect(await page.evaluate(() => (window as unknown as { __previewChecks: { csp: string[]; errors: number } }).__previewChecks)).toEqual({ csp: [], errors: 0 });
 });
 
+test('outline keeps one emphasis and smoothly retargets lengths after clicking', async ({ page }) => {
+  await page.goto(`/?preview=design${fragment}`);
+  const items = page.locator('.side-dash-item');
+  const bars = items.locator('.side-dash-bar');
+  const emphasized = () => bars.evaluateAll(nodes => nodes.flatMap((node, index) => Number(getComputedStyle(node).opacity) > 0.8 ? [index] : []));
+  await items.nth(1).hover();
+  await expect(page.getByRole('tooltip')).toBeVisible();
+  expect(await emphasized()).toEqual([1]);
+  await expect(items.first()).toHaveAttribute('aria-current', 'location');
+
+  await page.mouse.move(900, 700);
+  await expect(page.getByRole('tooltip')).toBeHidden();
+  expect(await emphasized()).toEqual([0]);
+  await items.first().click();
+  await expect(items.first()).toBeFocused();
+
+  // Sample the rendered frames: persistent button focus must not turn pointer motion into a jump.
+  await page.evaluate(() => {
+    const state = window as unknown as { __outlineFrames: { width: number; emphasisCount: number }[] };
+    state.__outlineFrames = [];
+    const record = () => {
+      const bars = [...document.querySelectorAll('.side-dash-bar')];
+      state.__outlineFrames.push({ width: bars[1]!.getBoundingClientRect().width,
+        emphasisCount: bars.filter(bar => Number(getComputedStyle(bar).opacity) > 0.8).length });
+      if (state.__outlineFrames.length < 16) requestAnimationFrame(record);
+    };
+    requestAnimationFrame(record);
+  });
+  await items.nth(1).hover();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __outlineFrames: unknown[] }).__outlineFrames.length)).toBe(16);
+  const frames = await page.evaluate(() => (window as unknown as { __outlineFrames: { width: number; emphasisCount: number }[] }).__outlineFrames);
+  expect(new Set(frames.map(frame => Math.round(frame.width * 10))).size).toBeGreaterThan(3);
+  expect(frames.every(frame => frame.emphasisCount === 1)).toBe(true);
+  expect(await emphasized()).toEqual([1]);
+  expect(await page.locator('style, [style]').count()).toBe(0);
+});
+
 test('outline follows all reading widths and reserves space at narrow desktop sizes', async ({ page }) => {
   await page.goto(`/?preview=design${fragment}`);
   const sideNav = page.locator('.side-outline-nav');
