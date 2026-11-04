@@ -334,27 +334,34 @@ test('reader preferences: theme, font-size, width, and chat-only filter toggle c
   await expect(popover).toBeHidden();
 });
 
-test('outline shows a readable user-only preview that stays open under the pointer', async ({ page }) => {
+test('outline previews the turn title, its first reply and the reading position', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto(`/?preview=design${fragment}`);
   await expect(page.locator('.timeline')).toBeVisible();
   const sideNav = page.locator('.side-outline-nav');
   const items = sideNav.locator('.side-dash-item');
-  await expect(items).toHaveCount(designShare().entries.filter(e => e.item.type === 'user_message').length);
+  const turns = designShare().entries.filter(e => e.item.type === 'user_message').length;
+  await expect(items).toHaveCount(turns);
   await items.nth(1).hover();
   const bubble = page.getByRole('tooltip');
   await expect(bubble).toBeVisible();
-  await expect(bubble).toContainText('我想给系统重构一下认证和授权中间件');
-  await expect(bubble).not.toContainText('Q2');
+  await expect(bubble.locator('.side-dash-title')).toContainText('我想给系统重构一下认证和授权中间件');
+  await expect(bubble.locator('.side-dash-body')).toContainText('Done. Auth now lives in requireAuth');
+  await expect(bubble.locator('.side-dash-position')).toHaveText(`2 of ${turns}`);
+  await expect(bubble.locator('.side-dash-time')).toHaveText(/^\d{2}:\d{2}$/);
+  await expect(bubble.locator('.side-dash-time')).toHaveAttribute('datetime', '2026-11-03T09:00:00Z');
+  await expect(bubble).not.toContainText('所有审计日志已同步完成');
   expect(await bubble.locator('button, a').count()).toBe(0);
 
   // Visibility alone misses the original bug: the bubble existed outside a clipped scrollport.
   expect(await bubble.evaluate(el => {
     const rect = el.getBoundingClientRect();
-    const text = el.firstElementChild as HTMLElement;
+    const title = el.querySelector<HTMLElement>('.side-dash-title')!;
+    const body = el.querySelector<HTMLElement>('.side-dash-body')!;
+    const lineHeight = (node: HTMLElement) => Number.parseFloat(getComputedStyle(node).lineHeight);
     return el.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))
-      && text.clientHeight <= Number.parseFloat(getComputedStyle(text).lineHeight) * 3
-      && text.scrollHeight > text.clientHeight;
+      && title.clientHeight <= lineHeight(title) * 2 + 1
+      && body.clientHeight <= lineHeight(body) * 3 + 1;
   })).toBe(true);
   const lengths = await items.locator('.side-dash-bar').evaluateAll(bars => bars.map(bar => bar.getBoundingClientRect().width));
   expect(lengths[1]).toBeGreaterThan(lengths[0]!);
@@ -467,7 +474,9 @@ test('a long outline scrolls independently, previews its last message, and follo
   expect(await page.evaluate(() => scrollY)).toBe(0);
   await items.last().hover();
   const bubble = page.getByRole('tooltip');
-  await expect(bubble).toHaveText('第 80 条消息：请检查 认证中间件 和 计费接口，然后说明需要修改的地方。');
+  await expect(bubble.locator('.side-dash-title')).toHaveText('第 80 条消息：请检查 认证中间件 和 计费接口，然后说明需要修改的地方。');
+  await expect(bubble.locator('.side-dash-body')).toContainText('检查结果与修改建议。');
+  await expect(bubble.locator('.side-dash-position')).toHaveText('80 of 80');
   const bounds = (await bubble.boundingBox())!;
   expect(bounds.y).toBeGreaterThan(61);
   expect(bounds.y + bounds.height).toBeLessThan(700);

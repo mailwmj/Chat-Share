@@ -100,5 +100,8 @@ export function failedCountText(count: number, locale: Locale): string {
 export function questionsCountText(count: number, locale: Locale): string {
   return locale === 'zh' ? `共 ${count} 轮问答` : (count === 1 ? '1 question' : `${count} questions`);
 }
+export function turnCountText(index: number, total: number, locale: Locale): string {
+  return locale === 'zh' ? `第 ${index} / ${total} 轮` : `${index} of ${total}`;
+}
 import { toolLabels } from '../../shared/tools';
 

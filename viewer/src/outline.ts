@@ -1,5 +1,37 @@
-import type { Translations } from './i18n';
+import { turnCountText, type Translations } from './i18n';
 import { element } from './render';
+
+function flatten(prose: HTMLElement, t: Translations): string {
+  const copy = prose.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll('.code-block-header, pre, table, img').forEach(node => node.remove());
+  copy.querySelectorAll('br').forEach(br => br.replaceWith(' '));
+  // Image placeholders are noise in a preview; the full message is one click away.
+  return copy.textContent!.split(t.image).join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function clip(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit).trimEnd()}…` : text;
+}
+
+/** The first reply of a turn is the one that answers the question; later ones usually report tool progress. */
+function firstReply(message: HTMLElement, t: Translations): string {
+  for (let node = message.nextElementSibling; node; node = node.nextElementSibling) {
+    if (!(node instanceof HTMLElement) || !node.classList.contains('message')) continue;
+    if (node.classList.contains('user')) break;
+    const prose = node.querySelector<HTMLElement>('.markdown');
+    const text = prose ? flatten(prose, t) : '';
+    if (text) return clip(text, 240);
+  }
+  return '';
+}
+
+/** 24-hour local clock, independent of the reader's locale so the footer stays aligned. */
+function clock(timestamp: string | undefined): string {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
 
 export function createOutline(timeline: HTMLElement, toolbar: HTMLElement, t: Translations) {
   const messages = [...timeline.querySelectorAll<HTMLElement>('.message.user')];
@@ -12,17 +44,24 @@ export function createOutline(timeline: HTMLElement, toolbar: HTMLElement, t: Tr
   preview.id = 'outline-preview';
   preview.setAttribute('popover', 'manual');
   preview.setAttribute('role', 'tooltip');
-  const previewText = element('div', 'side-dash-text');
-  preview.append(previewText);
+  const previewTitle = element('div', 'side-dash-title');
+  const previewText = element('div', 'side-dash-body');
+  const previewMeta = element('div', 'side-dash-meta');
+  const previewPosition = element('span', 'side-dash-position');
+  const previewTime = element('time', 'side-dash-time');
+  previewMeta.append(previewPosition, previewTime);
+  preview.append(previewTitle, previewText, previewMeta);
   nav.append(list, preview);
 
-  const snippets = messages.map(message => {
-    const prose = message.querySelector('.markdown')!.cloneNode(true) as HTMLElement;
-    prose.querySelectorAll('.code-block-header').forEach(header => header.remove());
-    prose.querySelectorAll('br').forEach(br => br.replaceWith(' '));
-    prose.querySelectorAll('img').forEach(img => img.replaceWith(img.alt || t.image));
-    const text = prose.textContent!.replace(/\s+/g, ' ').trim() || t.untitled;
-    return text.length > 240 ? `${text.slice(0, 240).trimEnd()}…` : text;
+  const turns = messages.map(message => {
+    const title = flatten(message.querySelector<HTMLElement>('.markdown')!, t) || t.untitled;
+    const stamp = message.dataset.timestamp ?? '';
+    return {
+      title: clip(title, 160),
+      reply: firstReply(message, t),
+      stamp,
+      time: clock(stamp),
+    };
   });
 
   const events = new AbortController();
@@ -68,7 +107,14 @@ export function createOutline(timeline: HTMLElement, toolbar: HTMLElement, t: Tr
     button.classList.add('is-previewed');
     const show = () => {
       const alreadyOpen = preview.matches(':popover-open');
-      previewText.textContent = snippets[index]!;
+      const turn = turns[index]!;
+      previewTitle.textContent = turn.title;
+      previewText.textContent = turn.reply;
+      previewText.hidden = !turn.reply;
+      previewPosition.textContent = turnCountText(index + 1, turns.length, t.locale);
+      previewTime.textContent = turn.time;
+      previewTime.hidden = !turn.time;
+      previewTime.setAttribute('datetime', turn.stamp);
       preview.classList.toggle('instant', keyboard || alreadyOpen);
       // Keep the last anchor during the exit fade so the preview cannot jump to the window corner.
       list.querySelector('.preview-anchor')?.classList.remove('preview-anchor');
@@ -90,7 +136,7 @@ export function createOutline(timeline: HTMLElement, toolbar: HTMLElement, t: Tr
     const button = element('button', 'side-dash-item');
     button.type = 'button';
     button.dataset.entryIndex = message.dataset.entryIndex;
-    button.setAttribute('aria-label', `${t.you} ${index + 1}: ${snippets[index]}`);
+    button.setAttribute('aria-label', `${t.you} ${index + 1}: ${turns[index]!.title}`);
     const bar = element('span', 'side-dash-bar');
     bar.setAttribute('aria-hidden', 'true');
     button.append(bar);

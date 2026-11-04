@@ -434,6 +434,7 @@ export function renderTimeline(share: ShareDocument, t: Translations): HTMLEleme
       article.id = `entry-${index}`;
       article.setAttribute('data-entry-index', String(index));
       article.setAttribute('aria-label', isUser ? t.you : t.assistant);
+      if (typeof entry.timestamp === 'string' && entry.timestamp) article.dataset.timestamp = entry.timestamp;
 
       if (isUser) {
         const text = string(item.text);
