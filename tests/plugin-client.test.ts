@@ -7,10 +7,11 @@ import { createSharePopover, listAllAgents } from '../client/share-popover';
 import { observeDirectory } from '../client/directory';
 
 const host = vi.hoisted(() => ({ rpc: vi.fn(), lookup: vi.fn(), listAll: vi.fn(), remove: vi.fn(), openUrl: vi.fn(), timeline: vi.fn(), list: vi.fn(), copy: vi.fn(), toast: { show: vi.fn(), error: vi.fn() } }));
-vi.mock('@getpaseo/plugin/client', () => {
+vi.mock('@getpaseo/plugin/client', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@getpaseo/plugin/client')>();
   const api = { agents: { list: host.list, ref: (id: string) => ({ timeline: host.timeline(id) }) } };
   const rpcs: Record<string, unknown> = { 'list-shares': host.lookup, 'list-all-shares': host.listAll, 'delete-share': host.remove, 'share-agent': host.rpc };
-  return { defineTranslations: (definition: unknown) => definition, useTranslation: () => ({ locale: navigator.language }), usePaseo: () => api, useRpc: (contract: { name: string }) => rpcs[contract.name], openExternalUrl: host.openUrl };
+  return { defineTranslations: original.defineTranslations, useTranslation: () => ({ locale: navigator.language }), usePaseo: () => api, useRpc: (contract: { name: string }) => rpcs[contract.name], openExternalUrl: host.openUrl };
 });
 vi.mock('@getpaseo/plugin/client/ui', async () => {
   const { createElement } = await import('react');
@@ -58,6 +59,20 @@ beforeEach(() => { vi.spyOn(navigator, 'language', 'get').mockReturnValue('zh-CN
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.replaceChildren(); vi.restoreAllMocks(); vi.resetAllMocks(); });
 
 describe('header registration follows the workspace directory', () => {
+  it('resolves the tooltip in the current app language after a language change', async () => {
+    const { PluginTranslationRuntime } = await import('@getpaseo/plugin/client/host');
+    let language = 'zh-CN';
+    const runtime = new PluginTranslationRuntime({ getLocale: () => language, subscribe: () => () => {} });
+    const dir = directory(), addHeaderButton = vi.fn((_contribution: Parameters<PluginClientContext['addHeaderButton']>[0]) => ({ remove: vi.fn() }));
+    const cleanup = registerHeaders({ paseo: { workspaces: { list: async () => dir } }, addHeaderButton } as unknown as PluginClientContext, () => null);
+    await Promise.resolve();
+    dir.snapshot({ entries: [{ id: 'workspace' }] });
+    const title = addHeaderButton.mock.calls[0]![0].button.title;
+    expect(runtime.resolve(title)).toBe('分享会话');
+    language = 'en';
+    expect(runtime.resolve(title)).toBe('Share conversation');
+    cleanup(); runtime.dispose();
+  });
   it('registers existing and later workspaces, removes archived ones, reconciles reconnects, and releases on cleanup', async () => {
     const dir = directory();
     const list = vi.fn().mockResolvedValue(dir), registrations = new Map<string, { remove: ReturnType<typeof vi.fn> }>();
@@ -176,6 +191,17 @@ describe('share popover', () => {
     await click('More sharing options for First');
     await click('Share First');
     expect(node.textContent).toContain('Sharing failed. Please try again.');
+  });
+  it('updates an open menu and a retained error when the app language changes', async () => {
+    host.rpc.mockResolvedValue({ error: '分享失败，请稍后重试。' });
+    const { node, dir, button, click } = await mountPopover([agent('a', '')]);
+    await click('分享 未命名会话');
+    await click('更多分享方式 未命名会话');
+    expect(node.textContent).toContain('分享失败，请稍后重试。');
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('en-US');
+    await act(async () => dir.snapshot({ entries: [{ agent: agent('a', '') }] }));
+    expect(node.textContent).toContain('Sharing failed. Please try again.');
+    expect(button('Share encrypted Untitled conversation')).not.toBeNull();
   });
   it('dismisses the share menu without triggering a share', async () => {
     const { node, click } = await mountPopover();
@@ -504,6 +530,14 @@ describe('managing share links', () => {
     expect(host.list.mock.lastCall![0].filter).toEqual({ includeArchived: true, includeBackground: true });
     expect(Array.from(node.querySelectorAll('button[aria-label^="选择"]')).map(row => row.getAttribute('aria-label'))).toEqual([rows.a, rows.b, rows.c]);
     expect(button('删除')).toBeNull();
+  });
+  it('updates unnamed rows when the app language changes', async () => {
+    const { node, dir } = await open();
+    expect(node.textContent).toContain('未命名会话');
+    vi.spyOn(navigator, 'language', 'get').mockReturnValue('en-US');
+    await act(async () => dir.snapshot({ entries: [{ agent: agent() }] }));
+    expect(node.textContent).toContain('Untitled conversation');
+    expect(node.textContent).not.toContain('未命名会话');
   });
   it('hugs a short list in the wide dialog, and keeps the bounded body only in the compact sheet', async () => {
     const wide = await open();

@@ -215,10 +215,10 @@ function MenuItem({ colors, height, still, label, title, onPress }: { colors: Co
   </Pressable>;
 }
 
-type MenuOption = { label: string; locked: boolean };
+type MenuOption = { locked: boolean; again?: boolean };
 
 function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, verdicts, error, copyFailed, menuOpen, onOpen, onMenu, onShare, onCopy }: {
-  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; verdicts: Verdicts; error?: string; copyFailed: boolean; menuOpen: boolean; onOpen?(): void; onMenu(y: number, title: string, options: MenuOption[]): void; onShare(locked: boolean): void; onCopy(shared: SharedSnapshot): void;
+  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; verdicts: Verdicts; error?: string; copyFailed: boolean; menuOpen: boolean; onOpen?(): void; onMenu(y: number, title: string | undefined, options: MenuOption[]): void; onShare(locked: boolean): void; onCopy(shared: SharedSnapshot): void;
 }) {
   const rowY = useRef(0);
   const title = agent.title || t('未命名会话', 'Untitled conversation');
@@ -229,8 +229,7 @@ function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, v
   if (shared && phase !== 'pending') currentPhase = !copyable || fresh === false || (failed && fresh !== true) ? 'share' : fresh === true ? phase : 'checking';
   // Keep the mode this conversation was shared in: one click must never turn an encrypted share into plaintext.
   const locked = !!shared?.locked, copying = currentPhase === 'copy' || currentPhase === 'copied';
-  const menu = copying ? [{ label: t('重新分享', 'Share again'), locked: false }, { label: t('重新加密分享', 'Share encrypted again'), locked: true }]
-    : [locked ? { label: t('分享', 'Share'), locked: false } : { label: t('加密分享', 'Share encrypted'), locked: true }];
+  const menu = copying ? [{ locked: false, again: true }, { locked: true, again: true }] : [{ locked: !locked }];
   const busy = currentPhase === 'checking' || currentPhase === 'pending';
   const textInset = { paddingLeft: 32, paddingRight: 8, paddingBottom: 8, fontSize: 13, lineHeight: 18 };
   const identityStyle = { flex: 1, minWidth: 0, minHeight: height, flexDirection: 'row', alignItems: 'center', gap: 8 } as const;
@@ -244,11 +243,11 @@ function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, v
         : <View style={identityStyle}>{identity}</View>}
       <View style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: 6, overflow: 'hidden' }}>
         <ShareAction colors={colors} height={actionHeight} still={still} phase={currentPhase} locked={locked} title={title} onPress={() => { if (copying && shared) onCopy(shared); else onShare(locked); }} />
-        <MenuToggle colors={colors} size={actionHeight} still={still} disabled={busy} open={menuOpen && !busy} title={title} onPress={() => onMenu(rowY.current, title, menu)} />
+        <MenuToggle colors={colors} size={actionHeight} still={still} disabled={busy} open={menuOpen && !busy} title={title} onPress={() => onMenu(rowY.current, agent.title || undefined, menu)} />
       </View>
     </View>
     {!!error && <>
-      <Text accessibilityRole="alert" style={{ ...textInset, color: colors.statusDanger }}>{error}</Text>
+      <Text accessibilityRole="alert" style={{ ...textInset, color: colors.statusDanger }}>{translateError(error)}</Text>
     </>}
     {failed && !error && <>
       <Text style={{ ...textInset, color: colors.foregroundMuted }}>{t('无法确认快照是否最新，请重新生成分享。', 'Could not verify that the snapshot is current. Create a new share.')}</Text>
@@ -349,9 +348,9 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
     const id = store.lookup();
     try {
       const result = await lookup();
-      if ('error' in result) store.lookupFailed(id, translateError(result.error));
+      if ('error' in result) store.lookupFailed(id, result.error);
       else store.checked(id, result.links);
-    } catch { store.lookupFailed(id, t('读取分享链接失败，请稍后重试。', 'Could not load share links. Please try again.')); }
+    } catch { store.lookupFailed(id, '读取分享链接失败，请稍后重试。'); }
   })().finally(() => { lookingUp = undefined; });
   if (preload) void refreshLinks(preload);
   // A listing already under way may have read a Gist that has since been deleted, so look again once it ends.
@@ -371,7 +370,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
     const [listFailed, setListFailed] = useState(false);
     const [copied, setCopied] = useState<string | null>(null);
     const [copyFailed, setCopyFailed] = useState<string | null>(null);
-    const [menu, setMenu] = useState<{ agentId: string; title: string; options: MenuOption[]; y: number } | null>(null);
+    const [menu, setMenu] = useState<{ agentId: string; title?: string; options: MenuOption[]; y: number } | null>(null);
     const panelRef = useRef<View>(null);
     const [bounds, setBounds] = useState<{ top: number; bottom: number }>();
     const [listY, setListY] = useState(0), [panelHeight, setPanelHeight] = useState(0);
@@ -410,8 +409,8 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
       const notice = locked && previous && !previous.locked ? t('。旧的明文链接仍可打开，需到 GitHub 删除。', '. The old unencrypted link still works; delete it on GitHub.') : '';
       if (!store.begin(agentId)) return;
       try {
-        const result = await rpc(locked ? { agentId, locked } : { agentId }).catch(() => { throw new Error(t('分享失败，请稍后重试。', 'Sharing failed. Please try again.')); });
-        if ('error' in result) throw new Error(translateError(result.error));
+        const result = await rpc(locked ? { agentId, locked } : { agentId }).catch(() => { throw new Error('分享失败，请稍后重试。'); });
+        if ('error' in result) throw new Error(result.error);
         store.succeed(agentId, result);
         if (open.current) setCopyFailed(current => current === agentId ? null : current);
         // A closed popover must not overwrite whatever the user has copied since.
@@ -420,7 +419,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
       } catch (error) {
         const message = (error as Error).message;
         store.fail(agentId, message);
-        toast.error(message);
+        toast.error(translateError(message));
       }
     }
     useEffect(() => {
@@ -457,7 +456,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
       : shares.checked ? 'share' : 'checking';
     return <View ref={panelRef} onLayout={event => setPanelHeight(event.nativeEvent.layout.height)} style={{ margin: -8, ...(layout.compact ? {} : { width: PANEL_WIDTH }), ...(menu ? { minHeight: rowHeight + menuHeight + 8 } : {}) }}>
       {shares.lookupError && <View style={{ padding: 8, gap: 4 }}>
-        <Text accessibilityRole="alert" style={{ color: colors.statusDanger, fontSize: 13, lineHeight: 18 }}>{shares.lookupError}</Text>
+        <Text accessibilityRole="alert" style={{ color: colors.statusDanger, fontSize: 13, lineHeight: 18 }}>{translateError(shares.lookupError)}</Text>
         <Pressable accessibilityRole="button" accessibilityLabel={t('重试读取分享链接', 'Retry loading share links')} onPress={refresh} style={{ minHeight: actionHeight, justifyContent: 'center' }}>
           <Text style={{ color: colors.foreground, fontSize: 13 }}>{t('重试', 'Retry')}</Text>
         </Pressable>
@@ -481,7 +480,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
       {menu && <>
         <Pressable accessibilityRole="button" accessibilityLabel={t('关闭分享菜单', 'Close share menu')} onPress={() => setMenu(null)} style={fill} />
         <View style={{ position: 'absolute', top: menuTop, right: 8, padding: 4, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface1, shadowColor: '#000', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 8 }}>
-          {menu.options.map(item => <MenuItem key={item.label} colors={colors} height={actionHeight} still={still} label={item.label} title={menu.title} onPress={() => { const id = menu.agentId; setMenu(null); void share(id, item.locked); }} />)}
+          {menu.options.map(item => <MenuItem key={String(item.locked)} colors={colors} height={actionHeight} still={still} label={item.again ? (item.locked ? t('重新加密分享', 'Share encrypted again') : t('重新分享', 'Share again')) : (item.locked ? t('加密分享', 'Share encrypted') : t('分享', 'Share'))} title={menu.title || t('未命名会话', 'Untitled conversation')} onPress={() => { const id = menu.agentId; setMenu(null); void share(id, item.locked); }} />)}
           <View style={{ height: 1, backgroundColor: colors.border }} />
           <MenuItem colors={colors} height={actionHeight} still={still} label={t('管理分享链接', 'Manage share links')} onPress={() => { setMenu(null); setManaging(true); }} />
         </View>

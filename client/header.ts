@@ -1,7 +1,9 @@
-import { t } from './i18n';
+import { defineTranslations } from '@getpaseo/plugin/client';
 import type { PluginClientContext, PluginButtonContentProps, PluginButtonRegistration } from '@getpaseo/plugin/client';
 import type { ComponentType } from 'react';
 import { observeDirectory } from './directory';
+
+const labels = defineTranslations({ resources: { en: { share: 'Share conversation' }, zh: { share: '分享会话' } } });
 
 export function registerHeaders(client: PluginClientContext, Content: ComponentType<PluginButtonContentProps>): () => void {
   const lifetime = new AbortController();
@@ -10,7 +12,7 @@ export function registerHeaders(client: PluginClientContext, Content: ComponentT
   const add = (id: string) => {
     if (lifetime.signal.aborted || buttons.has(id)) return;
     buttons.set(id, client.addHeaderButton({ id: 'share', workspaceId: id,
-      button: { title: t('分享会话', 'Share conversation'), icon: 'Share', behavior: { kind: 'popover', Content } } }));
+      button: { title: labels.message('share'), icon: 'Share', behavior: { kind: 'popover', Content } } }));
   };
   const stop = observeDirectory(
     (cursor, subscribe) => client.paseo.workspaces.list({ includeBackground: true, page: { limit: 200, cursor }, ...(subscribe ? { subscribe: {} } : {}) }),

@@ -6,7 +6,7 @@ import { Icon, Modal, ScrollView } from '@getpaseo/plugin/client/ui';
 import { deleteShare, listAllShares, type ShareLink } from '../shared/plugin';
 
 type Colors = PluginButtonContentProps['theme']['colors'];
-type Row = ShareLink & { title: string };
+type Row = ShareLink & { title?: string };
 
 // GitHub asks for at least a second between mutating requests, sent serially, to avoid secondary rate limits.
 const DELETE_PAUSE_MS = 1000;
@@ -44,16 +44,17 @@ function Action({ colors, height, label, tone = 'neutral', onPress }: { colors: 
 function ShareRow({ row, colors, compact, height, actionHeight, checked, disabled, onToggle }: { row: Row; colors: Colors; compact: boolean; height: number; actionHeight: number; checked: boolean; disabled: boolean; onToggle(): void }) {
   const [hovered, setHovered] = useState(false), [linkHovered, setLinkHovered] = useState(false);
   const time = shareTime(row.createdAt);
-  const title = <Text numberOfLines={1} style={{ flex: compact ? 0 : 1, minWidth: 0, color: colors.foreground, fontSize: 14, lineHeight: 18 }}>{row.title}</Text>;
+  const name = row.title || t('未命名会话', 'Untitled conversation');
+  const title = <Text numberOfLines={1} style={{ flex: compact ? 0 : 1, minWidth: 0, color: colors.foreground, fontSize: 14, lineHeight: 18 }}>{name}</Text>;
   const date = <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 13, lineHeight: 18, fontVariant: ['tabular-nums'] }}>{time}</Text>;
   return <View style={{ minHeight: height, flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: INSET, paddingRight: INSET - (actionHeight - 14) / 2 }}>
-    <Pressable accessibilityRole="checkbox" accessibilityLabel={t(`选择 ${row.title} ${time}`, `Select ${row.title} ${time}`)} accessibilityState={{ checked, disabled }} disabled={disabled}
+    <Pressable accessibilityRole="checkbox" accessibilityLabel={t(`选择 ${name} ${time}`, `Select ${name} ${time}`)} accessibilityState={{ checked, disabled }} disabled={disabled}
       onPress={onToggle} onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)} style={{ flex: 1, minWidth: 0, minHeight: height, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
       <Checkbox colors={colors} state={checked ? 'on' : 'off'} hovered={hovered && !disabled} />
       {/* A phone cannot spare the width: the date beside the title left it about 20 characters. */}
       {compact ? <View style={{ flex: 1, minWidth: 0 }}>{title}{date}</View> : <>{title}{date}</>}
     </Pressable>
-    <Pressable accessibilityRole="link" accessibilityLabel={t(`打开 ${row.title} ${time}`, `Open ${row.title} ${time}`)} onPress={() => void openExternalUrl(row.url).catch(() => {})}
+    <Pressable accessibilityRole="link" accessibilityLabel={t(`打开 ${name} ${time}`, `Open ${name} ${time}`)} onPress={() => void openExternalUrl(row.url).catch(() => {})}
       onHoverIn={() => setLinkHovered(true)} onHoverOut={() => setLinkHovered(false)} style={{ width: actionHeight, height: actionHeight, alignItems: 'center', justifyContent: 'center' }}>
       <Icon name="ExternalLink" size={14} color={linkHovered ? colors.foreground : colors.foregroundMuted} />
     </Pressable>
@@ -111,10 +112,10 @@ function ManageSharesBody({ open, colors, compact, onChanged }: { open: boolean;
     const live = () => session.current === opened;
     setRows(null); setSelected(new Set()); setConfirming(false); setError(undefined);
     void (async () => {
-      const [links, titles] = await Promise.all([list({}).catch(() => ({ error: t('读取分享链接失败，请稍后重试。', 'Could not load share links. Please try again.') })), readTitles()]);
+      const [links, titles] = await Promise.all([list({}).catch(() => ({ error: '读取分享链接失败，请稍后重试。' })), readTitles()]);
       if (!live()) return;
-      if ('error' in links) { setError(translateError(links.error)); return; }
-      setRows(links.links.map(link => ({ ...link, title: (link.agentId && titles.get(link.agentId)) || t('未命名会话', 'Untitled conversation') })));
+      if ('error' in links) { setError(links.error); return; }
+      setRows(links.links.map(link => ({ ...link, title: link.agentId ? titles.get(link.agentId) : undefined })));
     })();
     return () => { session.current++; };
   }, [open, loadId]);
@@ -134,9 +135,9 @@ function ManageSharesBody({ open, colors, compact, onChanged }: { open: boolean;
       for (const gistId of targets) {
         if (done > 0) await new Promise(resolve => setTimeout(resolve, DELETE_PAUSE_MS));
         if (!live()) break;
-        const result = await remove({ gistId }).catch(() => ({ error: t('删除失败，请稍后重试。', 'Deletion failed. Please try again.') }));
+        const result = await remove({ gistId }).catch(() => ({ error: '删除失败，请稍后重试。' }));
         // Every failure here is about GitHub or the token, not the row, so stop rather than repeat it.
-        if ('error' in result) { if (live()) setError(translateError(result.error)); break; }
+        if ('error' in result) { if (live()) setError(result.error); break; }
         done++;
         if (!live()) break;
         setRows(current => current?.filter(row => row.gistId !== gistId) ?? null);
@@ -154,7 +155,7 @@ function ManageSharesBody({ open, colors, compact, onChanged }: { open: boolean;
   const [hovered, setHovered] = useState(false), { height: windowHeight } = useWindowDimensions();
   return <View style={compact ? { flex: 1, minHeight: 0 } : { paddingBottom: 8 }}>
     {error && <View style={{ paddingVertical: 8 }}>
-      <Text accessibilityRole="alert" style={{ ...message, color: colors.statusDanger }}>{error}</Text>
+      <Text accessibilityRole="alert" style={{ ...message, color: colors.statusDanger }}>{translateError(error)}</Text>
       {rows === null && <View style={{ paddingHorizontal: INSET, alignItems: 'flex-start' }}>
         <Action colors={colors} height={actionHeight} label={t('重试', 'Retry')} onPress={() => setLoadId(id => id + 1)} />
       </View>}
