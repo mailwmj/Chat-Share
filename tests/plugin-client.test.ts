@@ -10,7 +10,7 @@ const host = vi.hoisted(() => ({ rpc: vi.fn(), lookup: vi.fn(), listAll: vi.fn()
 vi.mock('@getpaseo/plugin/client', () => {
   const api = { agents: { list: host.list, ref: (id: string) => ({ timeline: host.timeline(id) }) } };
   const rpcs: Record<string, unknown> = { 'list-shares': host.lookup, 'list-all-shares': host.listAll, 'delete-share': host.remove, 'share-agent': host.rpc };
-  return { usePaseo: () => api, useRpc: (contract: { name: string }) => rpcs[contract.name], openExternalUrl: host.openUrl };
+  return { defineTranslations: (definition: unknown) => definition, useTranslation: () => ({ locale: navigator.language }), usePaseo: () => api, useRpc: (contract: { name: string }) => rpcs[contract.name], openExternalUrl: host.openUrl };
 });
 vi.mock('@getpaseo/plugin/client/ui', async () => {
   const { createElement } = await import('react');

@@ -1,6 +1,10 @@
-/** Plugin text follows the client's preferred language, like the viewer. */
+/** Plugin text follows the Paseo app's language; the browser's language applies until the host reports one. */
+let hostLocale: string | undefined;
+export function setLocale(value: string | undefined) { hostLocale = value; }
+
 export function locale(): 'zh' | 'en' {
-  return typeof navigator !== 'undefined' && navigator.language?.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+  const language = hostLocale ?? (typeof navigator !== 'undefined' ? navigator.language : undefined);
+  return language?.toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }
 
 export function t(zh: string, en: string): string {

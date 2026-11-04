@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { locale, t, translateError } from '../client/i18n';
+import { locale, setLocale, t, translateError } from '../client/i18n';
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { setLocale(undefined); vi.unstubAllGlobals(); });
 
 describe('plugin language', () => {
   it('uses Chinese for Chinese clients', () => {
@@ -19,5 +19,14 @@ describe('plugin language', () => {
       .toBe('Encrypted conversation is too large: 10,000,001 bytes; the limit is 10,000,000 bytes.');
     vi.stubGlobal('navigator', { language: 'fr' });
     expect(locale()).toBe('en');
+  });
+
+  it('prefers the Paseo app language over the browser language', () => {
+    vi.stubGlobal('navigator', { language: 'en-US' });
+    setLocale('zh-CN');
+    expect(locale()).toBe('zh');
+    vi.stubGlobal('navigator', { language: 'zh-CN' });
+    setLocale('en');
+    expect(t('分享', 'Share')).toBe('Share');
   });
 });

@@ -1,7 +1,7 @@
-import { locale, t, translateError } from './i18n';
+import { locale, setLocale, t, translateError } from './i18n';
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { AccessibilityInfo, Animated, Easing, Platform, Pressable, Text, View } from 'react-native';
-import { usePaseo, useRpc, type PluginButtonContentProps, type PluginClientContext } from '@getpaseo/plugin/client';
+import { defineTranslations, usePaseo, useRpc, useTranslation, type PluginButtonContentProps, type PluginClientContext } from '@getpaseo/plugin/client';
 import { copyText, Icon, ScrollView, useToast } from '@getpaseo/plugin/client/ui';
 import { listShares, shareAgent, type SharedSnapshot } from '../shared/plugin';
 import { observeDirectory } from './directory';
@@ -24,6 +24,9 @@ const PANEL_WIDTH = 404, LIST_MAX_HEIGHT = 416;
 const ACTION_GAP = 0, SWEEP_WIDTH = 36;
 // Sized for the longest idle label (复制链接 / Copy link); busy states show only an icon.
 const actionWidth = () => locale() === 'zh' ? 70 : 76;
+
+// Read only for its locale: the hook re-renders the popover when the Paseo app language changes.
+const languageProbe = defineTranslations({ resources: { en: { language: 'language' } } });
 
 const shareText = (shared: SharedSnapshot) => shared.locked && shared.password ? `${shared.url}\n${t('密码：', 'Password: ')}${shared.password}` : shared.url;
 
@@ -352,6 +355,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
     for (const [workspaceId, entries] of grouped) if (!agentsByWorkspace.has(workspaceId)) agentsByWorkspace.set(workspaceId, tabOrder(entries));
   }, () => {});
   return function SharePopover({ workspaceId, theme, layout }: PluginButtonContentProps) {
+    setLocale(useTranslation(languageProbe).locale);
     const paseo = usePaseo(), rpc = useRpc(shareAgent), lookup = useRpc(listShares), toast = useToast(), colors = theme.colors, still = useReducedMotion();
     const shares = useSyncExternalStore(store.subscribe, store.get);
     const [agents, setAgents] = useState<PaseoAgent[] | null>(() => agentsByWorkspace.get(workspaceId) ?? null);
