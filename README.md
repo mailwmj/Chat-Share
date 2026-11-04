@@ -14,7 +14,7 @@ paseo plugin install /absolute/path/to/Chat-Share
 
 The server uses `gh auth token` for authentication. To use a custom viewer, open **Settings → Plugins → Chat-Share → 会话分享**, enter **查看器 URL**, and save. Leaving or clearing it uses the production default.
 
-Use **分享** in any workspace header (or **··· → 分享会话** in compact layouts). The popover lists non-archived agents, newest first, with their provider marks and a separate action on each row. **分享** creates and copies a snapshot link. While the conversation matches that snapshot, the action becomes **复制链接**. New content or a history reset replaces it with **重新分享** and hides the old copy action. Regeneration creates a new snapshot; existing links keep their original content. If copying fails, the current link is shown for manual selection. Delete the Gist on GitHub to revoke a link; cached raw content can remain readable for about five minutes.
+Use **分享** in any workspace header (or **··· → 分享会话** in compact layouts). The popover lists non-archived agents, newest first, with their provider marks and a separate action on each row. **分享** creates and copies a snapshot link. While the conversation matches that snapshot, the action becomes **复制链接**. New content or a history reset replaces it with **重新分享** and hides the old copy action. Regeneration creates a new snapshot; existing links keep their original content. If copying fails, the current link is shown for manual selection. To revoke links, use **管理分享链接** at the bottom of the popover: it lists every Chat-Share link of the `gh` account, newest first, for multi-select deletion, which cannot be undone. Deleting the Gist on GitHub also works. Either way, cached raw content can remain readable for about five minutes.
 
 ## Run
 
