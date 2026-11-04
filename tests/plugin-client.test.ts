@@ -128,14 +128,14 @@ function timeline(maxSeq = 10, epoch = version.epoch) {
     stop,
   };
 }
-async function mountPopover(entries: Array<ReturnType<typeof agent> & { archivedAt?: string }> = [agent()], Content = createSharePopover(), compact = false) {
+async function mountPopover(entries: Array<ReturnType<typeof agent> & { archivedAt?: string }> = [agent()], Content = createSharePopover(), compact = false, hostProps: object = {}) {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const dir = directory(); host.list.mockResolvedValue(dir);
   if (!host.lookup.getMockImplementation()) host.lookup.mockResolvedValue({ links: {} });
   if (!host.timeline.getMockImplementation()) host.timeline.mockReturnValue(timeline());
   const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
   await act(async () => root!.render(createElement(Content,
-    { workspaceId: 'current', theme: { colors: {} }, layout: { compact, platform: 'web' } } as PluginButtonContentProps)));
+    { workspaceId: 'current', theme: { colors: {} }, layout: { compact, platform: 'web' }, ...hostProps } as PluginButtonContentProps)));
   await act(async () => dir.snapshot({ entries: entries.map(agent => ({ agent })) }));
   const button = (label: string) => node.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
   const click = async (label: string) => { await act(async () => button(label).click()); };
@@ -143,6 +143,29 @@ async function mountPopover(entries: Array<ReturnType<typeof agent> & { archived
 }
 
 describe('share popover', () => {
+  it('opens the clicked conversation and closes the popover without sharing it', async () => {
+    const openAgent = vi.fn(), close = vi.fn();
+    const { click } = await mountPopover([agent(), agent('b', 'Second')], undefined, false, { navigation: { openAgent }, close });
+    await click('打开 Second');
+    expect(openAgent).toHaveBeenCalledExactlyOnceWith({ agentId: 'b' });
+    expect(close).toHaveBeenCalledOnce();
+    expect(host.rpc).not.toHaveBeenCalled();
+  });
+  it('sharing a row does not open the conversation', async () => {
+    const openAgent = vi.fn(), close = vi.fn();
+    host.rpc.mockReturnValue(new Promise(() => {}));
+    const { click } = await mountPopover([agent()], undefined, false, { navigation: { openAgent }, close });
+    await click('分享 First');
+    expect(host.rpc).toHaveBeenCalledOnce();
+    expect(openAgent).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+  it('offers no way to open a conversation when the host provides no navigation', async () => {
+    const { node, button } = await mountPopover();
+    expect(node.textContent).toContain('First');
+    expect(button('打开 First')).toBeNull();
+    expect(button('分享 First')).not.toBeNull();
+  });
   it('shows English controls and translated server errors', async () => {
     vi.spyOn(navigator, 'language', 'get').mockReturnValue('en-US');
     host.rpc.mockResolvedValue({ error: '分享失败，请稍后重试。' });

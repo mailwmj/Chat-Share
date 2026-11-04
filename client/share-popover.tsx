@@ -1,7 +1,7 @@
 import { locale, setLocale, t, translateError } from './i18n';
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { AccessibilityInfo, Animated, Easing, Platform, Pressable, Text, View } from 'react-native';
-import { defineTranslations, usePaseo, useRpc, useTranslation, type PluginButtonContentProps, type PluginClientContext } from '@getpaseo/plugin/client';
+import { defineTranslations, usePaseo, useRpc, useTranslation, type PluginButtonContentProps, type PluginClientContext, type PluginScreenProps } from '@getpaseo/plugin/client';
 import { copyText, Icon, ScrollView, useToast } from '@getpaseo/plugin/client/ui';
 import { listShares, shareAgent, type SharedSnapshot } from '../shared/plugin';
 import { observeDirectory } from './directory';
@@ -11,6 +11,9 @@ import { menuPosition, visibleRange } from './web';
 
 type AgentDirectory = Awaited<ReturnType<PluginClientContext['paseo']['agents']['list']>>;
 type PaseoAgent = AgentDirectory['entries'][number]['agent'];
+
+// Paseo gives navigation to screens and panels but not yet to button popovers; rows only become openable once a host passes it.
+type SharePopoverProps = PluginButtonContentProps & Pick<PluginScreenProps, 'navigation'>;
 
 type Colors = PluginButtonContentProps['theme']['colors'];
 type Phase = 'checking' | 'share' | 'pending' | 'copied' | 'copy';
@@ -214,8 +217,8 @@ function MenuItem({ colors, height, still, label, title, onPress }: { colors: Co
 
 type MenuOption = { label: string; locked: boolean };
 
-function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, verdicts, error, copyFailed, menuOpen, onMenu, onShare, onCopy }: {
-  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; verdicts: Verdicts; error?: string; copyFailed: boolean; menuOpen: boolean; onMenu(y: number, title: string, options: MenuOption[]): void; onShare(locked: boolean): void; onCopy(shared: SharedSnapshot): void;
+function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, verdicts, error, copyFailed, menuOpen, onOpen, onMenu, onShare, onCopy }: {
+  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; verdicts: Verdicts; error?: string; copyFailed: boolean; menuOpen: boolean; onOpen?(): void; onMenu(y: number, title: string, options: MenuOption[]): void; onShare(locked: boolean): void; onCopy(shared: SharedSnapshot): void;
 }) {
   const rowY = useRef(0);
   const title = agent.title || t('未命名会话', 'Untitled conversation');
@@ -230,10 +233,15 @@ function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, v
     : [locked ? { label: t('分享', 'Share'), locked: false } : { label: t('加密分享', 'Share encrypted'), locked: true }];
   const busy = currentPhase === 'checking' || currentPhase === 'pending';
   const textInset = { paddingLeft: 32, paddingRight: 8, paddingBottom: 8, fontSize: 13, lineHeight: 18 };
+  const identityStyle = { flex: 1, minWidth: 0, minHeight: height, flexDirection: 'row', alignItems: 'center', gap: 8 } as const;
+  const identity = <>
+    <View accessibilityRole="image" accessibilityLabel={agent.provider} style={{ width: 16, height: 16 }}><Icon {...providerIcon(agent.provider)} size={16} color={colors.foregroundMuted} /></View>
+    <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: colors.foreground, fontSize: 14, lineHeight: 18 }}>{title}</Text>
+  </>;
   return <View onLayout={event => { rowY.current = event.nativeEvent.layout.y; }}>
     <View style={{ minHeight: height, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
-      <View accessibilityRole="image" accessibilityLabel={agent.provider} style={{ width: 16, height: 16 }}><Icon {...providerIcon(agent.provider)} size={16} color={colors.foregroundMuted} /></View>
-      <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: colors.foreground, fontSize: 14, lineHeight: 18 }}>{title}</Text>
+      {onOpen ? <Pressable accessibilityRole="button" accessibilityLabel={t(`打开 ${title}`, `Open ${title}`)} onPress={onOpen} style={identityStyle}>{identity}</Pressable>
+        : <View style={identityStyle}>{identity}</View>}
       <View style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: 6, overflow: 'hidden' }}>
         <ShareAction colors={colors} height={actionHeight} still={still} phase={currentPhase} locked={locked} title={title} onPress={() => { if (copying && shared) onCopy(shared); else onShare(locked); }} />
         <MenuToggle colors={colors} size={actionHeight} still={still} disabled={busy} open={menuOpen && !busy} title={title} onPress={() => onMenu(rowY.current, title, menu)} />
@@ -354,7 +362,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
     for (const agent of agents) if (agent.workspaceId && !agent.archivedAt) grouped.set(agent.workspaceId, [...grouped.get(agent.workspaceId) ?? [], agent]);
     for (const [workspaceId, entries] of grouped) if (!agentsByWorkspace.has(workspaceId)) agentsByWorkspace.set(workspaceId, tabOrder(entries));
   }, () => {});
-  return function SharePopover({ workspaceId, theme, layout }: PluginButtonContentProps) {
+  return function SharePopover({ workspaceId, theme, layout, navigation, close }: SharePopoverProps) {
     setLocale(useTranslation(languageProbe).locale);
     const paseo = usePaseo(), rpc = useRpc(shareAgent), lookup = useRpc(listShares), toast = useToast(), colors = theme.colors, still = useReducedMotion();
     const shares = useSyncExternalStore(store.subscribe, store.get);
@@ -461,6 +469,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
           : <View onLayout={event => setListY(event.nativeEvent.layout.y)}><FadeIn still={still || reopened}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2, paddingVertical: 4 }} bounces={false} onScroll={event => { scrollY.current = event.nativeEvent.contentOffset.y; setMenu(null); }} scrollEventThrottle={16}>{agents.map(agent =>
             <AgentRow key={agent.id} agent={agent} colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} phase={phaseOf(agent.id)}
               shared={shares.links[agent.id]} verdicts={verdicts} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id} menuOpen={menu?.agentId === agent.id}
+              onOpen={navigation && (() => { navigation.openAgent({ agentId: agent.id }); close(); })}
               onMenu={(y, title, options) => { setBounds(visibleRange(panelRef.current)); setMenu(current => current?.agentId === agent.id ? null : { agentId: agent.id, y, title, options }); }}
               onShare={locked => { setMenu(null); void share(agent.id, locked); }}
               onCopy={shared => { setMenu(null); void copy(agent.id, shared); }} />)}</ScrollView></FadeIn></View>}
