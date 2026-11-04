@@ -1,4 +1,4 @@
-import { t, translateError } from './i18n';
+import { locale, t, translateError } from './i18n';
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { AccessibilityInfo, Animated, Easing, Platform, Pressable, Text, View } from 'react-native';
 import { usePaseo, useRpc, type PluginButtonContentProps, type PluginClientContext } from '@getpaseo/plugin/client';
@@ -21,7 +21,9 @@ const fill = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as c
 const COPIED_MS = 1600;
 // The host caps a popover surface at 420 x 440, with 12px of padding this panel pulls back by 8px.
 const PANEL_WIDTH = 404, LIST_MAX_HEIGHT = 416;
-const ACTION_WIDTH = 88, ACTION_GAP = 0, SWEEP_WIDTH = 36;
+const ACTION_GAP = 0, SWEEP_WIDTH = 36;
+// Sized for the longest idle label (复制链接 / Copy link); busy states show only an icon.
+const actionWidth = () => locale() === 'zh' ? 70 : 76;
 
 const shareText = (shared: SharedSnapshot) => shared.locked && shared.password ? `${shared.url}\n${t('密码：', 'Password: ')}${shared.password}` : shared.url;
 
@@ -96,7 +98,7 @@ function Spinner({ colors, still }: { colors: Colors; still: boolean }) {
 /** A band crossing the action while GitHub creates the link. */
 function Sweep({ colors, still }: { colors: Colors; still: boolean }) {
   const travel = useLoop(1100, still, settle);
-  const translateX = travel.interpolate({ inputRange: [0, 1], outputRange: [-SWEEP_WIDTH, ACTION_WIDTH] });
+  const translateX = travel.interpolate({ inputRange: [0, 1], outputRange: [-SWEEP_WIDTH, actionWidth()] });
   if (still) return null;
   return <Animated.View pointerEvents="none" style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: SWEEP_WIDTH, backgroundColor: colors.foreground, opacity: 0.08, zIndex: 0, transform: [{ translateX }] }} />;
 }
@@ -125,16 +127,16 @@ function ShareAction({ colors, height, still: reduced, phase, locked, title, onP
   return <Animated.View style={{ transform: [{ scale }] }}>
     <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled, busy: phase === 'pending' }} disabled={disabled} onPress={onPress}
       onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)} onPressIn={() => setDown(true)} onPressOut={() => setDown(false)}
-      style={{ width: ACTION_WIDTH, height, overflow: 'hidden' }}>
+      style={{ width: actionWidth(), height, overflow: 'hidden' }}>
       <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash, zIndex: 0 }} />
       <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.foreground, opacity: lift, zIndex: 0 }} />
       {sweep && <Sweep colors={colors} still={still} />}
       <Face shown={phase === 'checking'} still={still}><Label colors={colors}>{t('检查中', 'Checking')}</Label></Face>
-      <Face shown={phase === 'share' && !locked} still={still}><Icon name="Share" size={14} color={colors.foregroundMuted} /><Label colors={colors}>{t('分享', 'Share')}</Label></Face>
-      <Face shown={phase === 'share' && locked} still={still}><Icon name="Lock" size={14} color={colors.foregroundMuted} /><Label colors={colors}>{t('加密分享', 'Encrypt')}</Label></Face>
-      <Face shown={phase === 'pending'} still={still}><Spinner colors={colors} still={still} /><Label colors={colors}>{t('创建中', 'Creating')}</Label></Face>
-      <Face shown={phase === 'copied'} still={still}><CheckMark colors={colors} still={still} /><Label colors={colors}>{t('已复制', 'Copied')}</Label></Face>
-      <Face shown={phase === 'copy'} still={still}><Icon name={locked ? 'Lock' : 'Copy'} size={14} color={colors.foregroundMuted} /><Label colors={colors}>{t('复制链接', 'Copy link')}</Label></Face>
+      <Face shown={phase === 'share' && !locked} still={still}><Label colors={colors}>{t('分享', 'Share')}</Label></Face>
+      <Face shown={phase === 'share' && locked} still={still}><Label colors={colors}>{t('加密分享', 'Encrypt')}</Label></Face>
+      <Face shown={phase === 'pending'} still={still}><Spinner colors={colors} still={still} /></Face>
+      <Face shown={phase === 'copied'} still={still}><CheckMark colors={colors} still={still} /></Face>
+      <Face shown={phase === 'copy'} still={still}><Label colors={colors}>{t('复制链接', 'Copy link')}</Label></Face>
     </Pressable>
   </Animated.View>;
 }
@@ -199,7 +201,7 @@ function MenuItem({ colors, height, still, label, title, onPress }: { colors: Co
   const [hovered, setHovered] = useState(false);
   const wash = useTween(hovered ? 1 : 0, hovered ? 80 : 160, still);
   return <Pressable accessibilityRole="button" accessibilityLabel={title ? `${label} ${title}` : label} onPress={onPress} onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
-    style={{ minWidth: ACTION_WIDTH + ACTION_GAP + height, height, borderRadius: 4, overflow: 'hidden', justifyContent: 'center', paddingHorizontal: 10 }}>
+    style={{ minWidth: actionWidth() + ACTION_GAP + height, height, borderRadius: 4, overflow: 'hidden', justifyContent: 'center', paddingHorizontal: 10 }}>
     <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash, zIndex: 0 }} />
     <View pointerEvents="none" style={{ position: 'relative', zIndex: 1 }}>
       <Label colors={colors}>{label}</Label>
@@ -252,7 +254,7 @@ function SkeletonRows({ colors, height, actionHeight, still }: { colors: Colors;
       {[62, 44, 54].map(width => <View key={width} style={{ height, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
         <View style={{ width: 16, height: 16, borderRadius: 4, backgroundColor: colors.surface2 }} />
         <View style={{ flex: 1 }}><View style={{ width: `${width}%`, height: 8, borderRadius: 4, backgroundColor: colors.surface2 }} /></View>
-        <View style={{ width: ACTION_WIDTH + ACTION_GAP + actionHeight, height: actionHeight, borderRadius: 6, backgroundColor: colors.surface2, opacity: 0.5 }} />
+        <View style={{ width: actionWidth() + ACTION_GAP + actionHeight, height: actionHeight, borderRadius: 6, backgroundColor: colors.surface2, opacity: 0.5 }} />
       </View>)}
     </View>
   </FadeIn>;
