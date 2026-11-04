@@ -55,7 +55,7 @@ export function markdownRenderer(t: Translations): (source: string) => string {
       `<div class="code-block-header">` +
         `<span class="code-lang">${langDisplay}</span>` +
         `<button type="button" class="copy-code-btn" aria-label="${escapeHtml(t.copyCode)}">` +
-          `<svg class="copy-icon" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M3.5 10.5V3.5a1 1 0 0 1 1-1h7"/></svg>` +
+          `<svg class="copy-icon" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M6.9998 6V3C6.9998 2.44772 7.44752 2 7.9998 2H19.9998C20.5521 2 20.9998 2.44772 20.9998 3V17C20.9998 17.5523 20.5521 18 19.9998 18H16.9998V20.9991C16.9998 21.5519 16.5499 22 15.993 22H4.00666C3.45059 22 3 21.5554 3 20.9991L3.0026 7.00087C3.0027 6.44811 3.45264 6 4.00942 6H6.9998ZM5.00242 8L5.00019 20H14.9998V8H5.00242ZM8.9998 6H16.9998V16H18.9998V4H8.9998V6Z"/></svg>` +
           `<span class="copy-label">${escapeHtml(t.copyCode)}</span>` +
         `</button>` +
       `</div>` +

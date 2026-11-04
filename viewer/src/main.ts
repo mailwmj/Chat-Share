@@ -3,7 +3,7 @@ import { decodeBytes, deriveShareKey, encodeBytes, openLockedShare, passwordDigi
 import { ShareError, type LockedShare, type ShareDocument } from '../../shared/format';
 import { downloadMarkdown } from '../../shared/download';
 import { browserLocale, messages } from './i18n';
-import { element, renderTimeline, createIcon } from './render';
+import { element, renderTimeline, createIcon, createModelIcon } from './render';
 import { loadShare, rawUrl } from './load';
 import { createOutline } from './outline';
 
@@ -79,6 +79,7 @@ export function showShare(share: ShareDocument): void {
   document.title = `${title} · Chat-Share`;
   const header = element('header', 'toolbar'), inner = element('div', 'toolbar-inner');
   const titleGroup = element('div', 'toolbar-title-group');
+  const modelIcon = createModelIcon(share.session, 20);
   const heading = element('h1', '', title);
   heading.title = title;
   const actions = element('nav', 'actions');
@@ -389,7 +390,7 @@ export function showShare(share: ShareDocument): void {
   }, { passive: true });
 
   actions.append(expand, themeToggle, readerBtn, download);
-  titleGroup.append(heading);
+  titleGroup.append(modelIcon, heading);
   inner.append(titleGroup, actions, popover);
   header.append(inner);
 

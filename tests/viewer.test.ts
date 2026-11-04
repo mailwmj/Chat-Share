@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { editLines, renderTimeline, toolSummary, stepSummary, createIcon } from '../viewer/src/render';
+import { editLines, renderTimeline, toolSummary, stepSummary, createIcon, createModelIcon, resolveModelIconKey } from '../viewer/src/render';
 import { markdownRenderer, safeLink } from '../viewer/src/markdown';
 import { rawUrl, loadShare } from '../viewer/src/load';
 import { messages, browserLocale, questionsCountText } from '../viewer/src/i18n';
@@ -560,10 +560,40 @@ describe('user message clamping and detail panels', () => {
     expect(questionsCountText(1, 'zh')).toBe('共 1 轮问答');
     expect(questionsCountText(5, 'zh')).toBe('共 5 轮问答');
 
-    for (const icon of ['download', 'expand', 'collapse', 'sun', 'moon', 'theme_auto', 'typography', 'toc', 'arrow_up', 'close', 'link']) {
+    for (const icon of ['download', 'expand', 'collapse', 'sun', 'moon', 'theme_auto', 'typography', 'toc', 'arrow_up', 'close', 'link', 'check', 'chevron', 'shell', 'read', 'edit', 'write', 'search', 'fetch', 'sub_agent', 'reasoning', 'error', 'notification', 'compaction', 'todo', 'default']) {
       const el = createIcon(icon);
       expect(el.tagName.toLowerCase()).toBe('svg');
       expect(el.classList.contains(`icon-${icon}`)).toBe(true);
+      expect(el.getAttribute('viewBox')).toBe('0 0 24 24');
+      expect(el.getAttribute('fill')).toBe('currentColor');
     }
+  });
+
+  it('resolves model provider/model name to corresponding brand icon and creates model icon', () => {
+    expect(resolveModelIconKey('Anthropic', 'claude-3-5-sonnet-20241022')).toBe('claude');
+    expect(resolveModelIconKey('OpenAI', 'gpt-4o')).toBe('openai');
+    expect(resolveModelIconKey('Google', 'gemini-2.0-flash')).toBe('gemini');
+    expect(resolveModelIconKey('DeepSeek', 'deepseek-reasoner')).toBe('deepseek');
+    expect(resolveModelIconKey('Alibaba', 'qwen-2.5-coder-32b')).toBe('qwen');
+    expect(resolveModelIconKey('xAI', 'grok-2')).toBe('grok');
+    expect(resolveModelIconKey('Moonshot', 'moonshot-v1-8k')).toBe('kimi');
+    expect(resolveModelIconKey(undefined, 'kimi-k1')).toBe('kimi');
+    expect(resolveModelIconKey('MiniMax', 'abab6.5s')).toBe('minimax');
+    expect(resolveModelIconKey('Zhipu', 'glm-4-plus')).toBe('zhipu');
+    expect(resolveModelIconKey(undefined, 'cursor-small')).toBe('cursor');
+    expect(resolveModelIconKey('CustomProvider', 'unknown-model')).toBe('sparkling_fill');
+
+    const claudeIcon = createModelIcon({ provider: 'Anthropic', model: 'claude-3.5-sonnet' } as any, 20);
+    expect(claudeIcon.tagName.toLowerCase()).toBe('svg');
+    expect(claudeIcon.classList.contains('model-icon')).toBe(true);
+    expect(claudeIcon.classList.contains('model-icon-claude')).toBe(true);
+    expect(claudeIcon.getAttribute('role')).toBe('img');
+    expect(claudeIcon.getAttribute('aria-label')).toBe('Anthropic · claude-3.5-sonnet');
+    expect(claudeIcon.querySelector('title')?.textContent).toBe('Anthropic · claude-3.5-sonnet');
+    expect(claudeIcon.getAttribute('width')).toBe('20');
+    expect(claudeIcon.getAttribute('height')).toBe('20');
+
+    const fallbackIcon = createModelIcon({} as any);
+    expect(fallbackIcon.classList.contains('model-icon-sparkling_fill')).toBe(true);
   });
 });
