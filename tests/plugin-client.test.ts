@@ -3,7 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { PluginButtonContentProps, PluginClientContext } from '@getpaseo/plugin/client';
 import { registerHeaders } from '../client/header';
-import { createSharePopover } from '../client/share-popover';
+import { createSharePopover, listAllAgents } from '../client/share-popover';
 import { observeDirectory } from '../client/directory';
 
 const host = vi.hoisted(() => ({ rpc: vi.fn(), lookup: vi.fn(), timeline: vi.fn(), list: vi.fn(), copy: vi.fn(), toast: { show: vi.fn(), error: vi.fn() } }));
@@ -197,6 +197,28 @@ describe('share popover', () => {
     expect(button('复制 First 的链接')).not.toBeNull();
     await act(async () => lookup.resolve({ links: {} }));
     expect(button('分享 First')).not.toBeNull();
+  });
+  it('shows preloaded rows on the first open, in tab order and only for this workspace', async () => {
+    host.lookup.mockResolvedValue({ links: {} }); host.list.mockReturnValue(new Promise(() => {}));
+    const Content = createSharePopover(undefined, async () => [
+      agent('new', 'Newer', '2026-11-03T08:00:00Z', '2026-11-02T00:00:00Z'), agent('old', 'Older', '2026-11-03T08:00:00Z', '2026-11-01T00:00:00Z'),
+      { ...agent('x', 'Elsewhere'), workspaceId: 'other' }, { ...agent('z', 'Archived'), archivedAt: 'yesterday' },
+    ] as never);
+    await Promise.resolve();
+    const node = document.createElement('div'); document.body.append(node); root = createRoot(node);
+    await act(async () => root!.render(createElement(Content, { workspaceId: 'current', theme: { colors: {} }, layout: { compact: false, platform: 'web' } } as PluginButtonContentProps)));
+    expect(Array.from(node.querySelectorAll('button')).map(button => button.getAttribute('aria-label'))).toEqual(['分享 Older', '分享 Newer']);
+    expect(node.querySelector('[aria-label="正在读取会话…"]')).toBeNull();
+  });
+  it('still loads the list on open when the agent preload fails', async () => {
+    const { button } = await mountPopover([agent()], createSharePopover(undefined, async () => { throw new Error('offline'); }));
+    expect(button('分享 First')).not.toBeNull();
+  });
+  it('preloads agents across every directory page', async () => {
+    host.list.mockResolvedValueOnce({ entries: [{ agent: agent('a') }], pageInfo: { nextCursor: 'next' } }).mockResolvedValueOnce({ entries: [{ agent: agent('b') }], pageInfo: { nextCursor: null } });
+    const agents = await listAllAgents({ agents: { list: host.list } } as unknown as PluginClientContext['paseo']);
+    expect(agents.map(({ id }) => id)).toEqual(['a', 'b']);
+    expect(host.list.mock.calls[1]![0]).toMatchObject({ page: { cursor: 'next' } });
   });
   it('reopens with the last rows and check, and an unchanged lookup does not restart the check', async () => {
     const live = timeline(); host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
