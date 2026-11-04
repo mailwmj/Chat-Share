@@ -38,3 +38,18 @@ export const listShares = defineRpc({
   input: z.object({}),
   output: z.union([z.object({ links: z.record(z.string(), sharedSnapshot) }), z.object({ error: z.string() })]),
 });
+
+const shareLink = z.object({ gistId: z.string().min(1), url: z.string().url(), createdAt: z.string().min(1), agentId: z.string().min(1).optional() });
+export type ShareLink = z.infer<typeof shareLink>;
+
+export const listAllShares = defineRpc({
+  name: 'list-all-shares',
+  input: z.object({}),
+  output: z.union([z.object({ links: z.array(shareLink) }), z.object({ error: z.string() })]),
+});
+
+export const deleteShare = defineRpc({
+  name: 'delete-share',
+  input: z.object({ gistId: z.string().min(1) }),
+  output: z.union([z.object({ deleted: z.literal(true) }), z.object({ error: z.string() })]),
+});

@@ -4,6 +4,7 @@ import { usePaseo, useRpc, type PluginButtonContentProps, type PluginClientConte
 import { copyText, Icon, ScrollView, useToast } from '@getpaseo/plugin/client/ui';
 import { listShares, shareAgent, type SharedSnapshot } from '../shared/plugin';
 import { observeDirectory } from './directory';
+import { ManageSharesModal } from './manage-shares';
 import { providerIcon } from './provider-icons';
 
 type AgentDirectory = Awaited<ReturnType<PluginClientContext['paseo']['agents']['list']>>;
@@ -17,7 +18,7 @@ const nativeDriver = Platform.OS !== 'web';
 const fill = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as const;
 const COPIED_MS = 1600;
 // The host caps a popover surface at 420 x 440, with 12px of padding this panel pulls back by 8px.
-const PANEL_WIDTH = 404, LIST_MAX_HEIGHT = 416;
+const PANEL_WIDTH = 404, FOOTER_HEIGHT = 36, LIST_MAX_HEIGHT = 416 - FOOTER_HEIGHT - 1;
 const ACTION_WIDTH = 88, ACTION_GAP = 2, SWEEP_WIDTH = 36;
 
 const shareText = (shared: SharedSnapshot) => shared.locked && shared.password ? `${shared.url}\n密码：${shared.password}` : shared.url;
@@ -64,26 +65,6 @@ function usePresence(open: boolean, exitMs: number) {
   return open || mounted;
 }
 
-/** Eases its height to fit the content; the first measure lands without motion so a reopened panel is already whole. */
-function Collapse({ open, still, children }: { open: boolean; still: boolean; children: ReactNode }) {
-  const height = useRef(new Animated.Value(0)).current;
-  const natural = useRef<number | null>(null);
-  const kept = useRef(children);
-  if (open) kept.current = children;
-  const present = usePresence(open, still ? 0 : 160);
-  const opacity = useTween(open ? 1 : 0, open ? 140 : 100, still, { delay: open ? 60 : 0 });
-  const ease = (toValue: number) => Animated.timing(height, { toValue, duration: still ? 0 : open ? 200 : 160, easing: settle, useNativeDriver: false }).start();
-  useEffect(() => { if (natural.current !== null) ease(open ? natural.current : 0); }, [open]);
-  return <Animated.View style={{ height, overflow: 'hidden' }}>
-    <Animated.View style={{ position: 'absolute', top: 0, left: 0, right: 0, opacity }} onLayout={({ nativeEvent }) => {
-      const measured = nativeEvent.layout.height;
-      if (natural.current === null) height.setValue(open ? measured : 0);
-      else if (open && measured !== natural.current) ease(measured);
-      natural.current = measured;
-    }}>{present ? kept.current : null}</Animated.View>
-  </Animated.View>;
-}
-
 function FadeIn({ still, delay = 0, children }: { still: boolean; delay?: number; children: ReactNode }) {
   const opacity = useTween(1, 160, still, { from: 0, delay });
   return <Animated.View style={{ opacity }}>{children}</Animated.View>;
@@ -123,8 +104,12 @@ function CheckMark({ colors, still }: { colors: Colors; still: boolean }) {
   return <Animated.View style={{ transform: [{ scale }] }}><Icon name="Check" size={14} color={colors.statusSuccess} /></Animated.View>;
 }
 
-function ShareAction({ colors, height, still, phase, locked, title, onPress }: { colors: Colors; height: number; still: boolean; phase: Phase; locked: boolean; title: string; onPress(): void }) {
+function ShareAction({ colors, height, still: reduced, phase, locked, title, onPress }: { colors: Colors; height: number; still: boolean; phase: Phase; locked: boolean; title: string; onPress(): void }) {
   const [hovered, setHovered] = useState(false), [down, setDown] = useState(false);
+  // The opening state appears at once; only later state changes animate.
+  const [entered, setEntered] = useState(false);
+  useEffect(() => setEntered(true), []);
+  const still = reduced || !entered;
   const disabled = phase === 'checking' || phase === 'pending';
   useEffect(() => { if (disabled) { setHovered(false); setDown(false); } }, [disabled]);
   // A row that needs sharing stays an outline; a filled action means a current link is ready.
@@ -152,38 +137,43 @@ function ShareAction({ colors, height, still, phase, locked, title, onPress }: {
   </Animated.View>;
 }
 
+/** The last check of each link, shown on reopen while a new check runs. */
+type Verdicts = WeakMap<SharedSnapshot, boolean>;
+
 /** Compare canonical content, rather than updatedAt (which also changes for titles and settings). */
-function useSnapshotFreshness(agentId: string, shared?: SharedSnapshot) {
+function useSnapshotFreshness(agentId: string, shared: SharedSnapshot | undefined, verdicts: Verdicts) {
   const paseo = usePaseo();
   const [result, setResult] = useState<{ shared: SharedSnapshot; fresh: boolean }>();
   const [failed, setFailed] = useState(false);
   useEffect(() => {
+    setFailed(false);
     if (!shared) return;
     const version = shared.version, timeline = paseo.agents.ref(agentId).timeline;
     let live = true, changed = false;
-    setFailed(false);
-    const stale = () => { changed = true; if (live) setResult({ shared, fresh: false }); };
+    const decide = (fresh: boolean) => { verdicts.set(shared, fresh); if (live) setResult({ shared, fresh }); };
+    const stale = () => { changed = true; decide(false); };
+    const unavailable = () => { verdicts.delete(shared); if (live) { setResult(undefined); setFailed(true); } };
     const refresh = async () => {
       try {
         const page = await timeline.refetch({ direction: 'tail', limit: 1, projection: 'projected' });
         if (!live || changed) return;
         if (page.error || page.reset || page.gap || page.staleCursor) throw new Error('Unavailable timeline');
         setFailed(false);
-        setResult({ shared, fresh: page.epoch === version.epoch && page.window.maxSeq === version.maxSeq });
-      } catch { if (live) { setResult(undefined); setFailed(true); } }
+        decide(page.epoch === version.epoch && page.window.maxSeq === version.maxSeq);
+      } catch { unavailable(); }
     };
     const stop = timeline.subscribe(message => {
       if (!live) return;
       if (message.event.type === 'replacement') stale();
-      else if (message.event.type === 'subscription_restored') { if (!changed) { setResult(undefined); void refresh(); } }
-      else if (message.event.type === 'error') { setResult(undefined); setFailed(true); }
+      else if (message.event.type === 'subscription_restored') { if (!changed) { verdicts.delete(shared); setResult(undefined); void refresh(); } }
+      else if (message.event.type === 'error') unavailable();
       else if ('seq' in message && message.seq !== undefined
         && (message.epoch !== version.epoch || message.seq > version.maxSeq)) stale();
     });
-    void stop.ready.then(refresh, () => { if (live) setFailed(true); });
+    void stop.ready.then(refresh, unavailable);
     return () => { live = false; stop(); };
   }, [paseo, agentId, shared]);
-  return { fresh: result?.shared === shared ? result?.fresh : undefined, failed };
+  return { fresh: result?.shared === shared ? result?.fresh : shared && verdicts.get(shared), failed };
 }
 
 function MenuToggle({ colors, size, still, disabled, open, title, onPress }: { colors: Colors; size: number; still: boolean; disabled: boolean; open: boolean; title: string; onPress(): void }) {
@@ -213,13 +203,13 @@ function MenuItem({ colors, height, still, label, title, onPress }: { colors: Co
   </Pressable>;
 }
 
-function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, error, copyFailed, menuOpen, onMenu, onShare, onCopy }: {
-  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; error?: string; copyFailed: boolean; menuOpen: boolean; onMenu(): void; onShare(locked: boolean): void; onCopy(shared: SharedSnapshot): void;
+function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, verdicts, error, copyFailed, menuOpen, onMenu, onShare, onCopy }: {
+  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; verdicts: Verdicts; error?: string; copyFailed: boolean; menuOpen: boolean; onMenu(): void; onShare(locked: boolean): void; onCopy(shared: SharedSnapshot): void;
 }) {
   const title = agent.title || '未命名会话';
   // A locked link is useless without its password, so it can only be replaced and needs no freshness check.
   const copyable = shared && (!shared.locked || shared.password) ? shared : undefined;
-  const { fresh, failed } = useSnapshotFreshness(agent.id, copyable);
+  const { fresh, failed } = useSnapshotFreshness(agent.id, copyable, verdicts);
   let currentPhase = phase;
   if (shared && phase !== 'pending') currentPhase = !copyable || fresh === false || (failed && fresh !== true) ? 'share' : fresh === true ? phase : 'checking';
   // Keep the mode this conversation was shared in: one click must never turn an encrypted share into plaintext.
@@ -237,20 +227,20 @@ function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, e
         <MenuToggle colors={colors} size={actionHeight} still={still} disabled={busy} open={menuOpen && !busy} title={title} onPress={onMenu} />
       </View>
     </View>
-    <Collapse open={menuOpen && !busy} still={still}>
+    {menuOpen && !busy && <>
       <View style={{ alignItems: 'flex-end', gap: 2, paddingHorizontal: 8, paddingBottom: 4 }}>
         {menu.map(item => <MenuItem key={item.label} colors={colors} height={actionHeight} still={still} label={item.label} title={title} onPress={() => onShare(item.locked)} />)}
       </View>
-    </Collapse>
-    <Collapse open={!!error} still={still}>
+    </>}
+    {!!error && <>
       <Text accessibilityRole="alert" style={{ ...textInset, color: colors.statusDanger }}>{error}</Text>
-    </Collapse>
-    <Collapse open={failed && !error} still={still}>
+    </>}
+    {failed && !error && <>
       <Text style={{ ...textInset, color: colors.foregroundMuted }}>无法确认快照是否最新，请重新生成分享。</Text>
-    </Collapse>
-    <Collapse open={copyFailed && fresh === true} still={still}>
+    </>}
+    {copyFailed && fresh === true && <>
       <Text selectable style={{ ...textInset, color: colors.foreground }}>{shared && shareText(shared)}</Text>
-    </Collapse>
+    </>}
   </View>;
 }
 
@@ -292,7 +282,13 @@ function createShareStore() {
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     lookup() { created = {}; set({ lookupError: undefined }); return ++lookupId; },
     checked(id: number, links: Record<string, SharedSnapshot>) {
-      if (id === lookupId) set({ checked: true, lookupError: undefined, links: { ...links, ...created } });
+      if (id !== lookupId) return;
+      // An unchanged link keeps its identity, so a background lookup does not restart its row's check.
+      const merged = Object.entries({ ...links, ...created }).map(([agentId, link]) => {
+        const known = state.links[agentId];
+        return [agentId, known?.url === link.url && known.version.epoch === link.version.epoch && known.version.maxSeq === link.version.maxSeq ? known : link];
+      });
+      set({ checked: true, lookupError: undefined, links: Object.fromEntries(merged) });
     },
     lookupFailed(id: number, message: string) { if (id === lookupId) set({ lookupError: message }); },
     /** False when this agent is already uploading. */
@@ -310,33 +306,66 @@ function createShareStore() {
   };
 }
 
-/** An installation keeps uploads and known links across popover closes and workspace switches. */
-export function createSharePopover() {
+const AGENT_FILTER = { includeArchived: false, includeBackground: true };
+// Plugins cannot read the host's tab layout; creation order is the closest stable match.
+const tabOrder = (entries: PaseoAgent[]) => entries.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+
+export async function listAllAgents(paseo: PluginClientContext['paseo']) {
+  const agents: PaseoAgent[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await paseo.agents.list({ filter: AGENT_FILTER, page: { limit: 200, cursor } });
+    agents.push(...page.entries.map(({ agent }) => agent));
+    cursor = page.pageInfo.nextCursor ?? undefined;
+  } while (cursor);
+  return agents;
+}
+
+type LookupLinks = () => Promise<{ links: Record<string, SharedSnapshot> } | { error: string }>;
+
+/** An installation keeps uploads, known links, rows and checks across popover closes and workspace switches. */
+export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => Promise<PaseoAgent[]>) {
   const store = createShareStore();
+  const agentsByWorkspace = new Map<string, PaseoAgent[]>();
+  const verdicts: Verdicts = new WeakMap();
+  // One lookup at a time: opening during another must not restart a slow GitHub listing.
+  let lookingUp: Promise<void> | undefined;
+  const refreshLinks = (lookup: LookupLinks) => lookingUp ??= (async () => {
+    const id = store.lookup();
+    try {
+      const result = await lookup();
+      if ('error' in result) store.lookupFailed(id, result.error);
+      else store.checked(id, result.links);
+    } catch { store.lookupFailed(id, '读取分享链接失败，请稍后重试。'); }
+  })().finally(() => { lookingUp = undefined; });
+  if (preload) void refreshLinks(preload);
+  // A listing already under way may have read a Gist that has since been deleted, so look again once it ends.
+  const refreshAfterDelete = (lookup: LookupLinks) => void Promise.resolve(lookingUp).then(() => refreshLinks(lookup));
+  // Known rows make the first open full height at once. A failed preload just means loading on open.
+  void preloadAgents?.().then(agents => {
+    const grouped = new Map<string, PaseoAgent[]>();
+    for (const agent of agents) if (agent.workspaceId && !agent.archivedAt) grouped.set(agent.workspaceId, [...grouped.get(agent.workspaceId) ?? [], agent]);
+    for (const [workspaceId, entries] of grouped) if (!agentsByWorkspace.has(workspaceId)) agentsByWorkspace.set(workspaceId, tabOrder(entries));
+  }, () => {});
   return function SharePopover({ workspaceId, theme, layout }: PluginButtonContentProps) {
     const paseo = usePaseo(), rpc = useRpc(shareAgent), lookup = useRpc(listShares), toast = useToast(), colors = theme.colors, still = useReducedMotion();
     const shares = useSyncExternalStore(store.subscribe, store.get);
-    const [agents, setAgents] = useState<PaseoAgent[] | null>(null);
+    const [agents, setAgents] = useState<PaseoAgent[] | null>(() => agentsByWorkspace.get(workspaceId) ?? null);
+    const reopened = useRef(agents !== null).current;
     const [listFailed, setListFailed] = useState(false);
     const [copied, setCopied] = useState<string | null>(null);
     const [copyFailed, setCopyFailed] = useState<string | null>(null);
     const [menuAgent, setMenuAgent] = useState<string | null>(null);
+    const [managing, setManaging] = useState(false);
     const copiedTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
     const open = useRef(false);
-    async function refreshLinks() {
-      const id = store.lookup();
-      try {
-        const result = await lookup({});
-        if ('error' in result) store.lookupFailed(id, result.error);
-        else store.checked(id, result.links);
-      } catch { store.lookupFailed(id, '读取分享链接失败，请稍后重试。'); }
-    }
+    const refresh = () => void refreshLinks(() => lookup({}));
     useEffect(() => {
       open.current = true;
-      void refreshLinks();
+      refresh();
       return () => { open.current = false; clearTimeout(copiedTimer.current); };
     }, []);
-    const recentFirst = (entries: PaseoAgent[]) => entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
+    useEffect(() => { if (agents) agentsByWorkspace.set(workspaceId, agents); }, [agents, workspaceId]);
     async function copy(agentId: string, shared: SharedSnapshot, notice = '') {
       clearTimeout(copiedTimer.current);
       try {
@@ -369,10 +398,10 @@ export function createSharePopover() {
     }
     useEffect(() => {
       return observeDirectory(
-        (cursor, subscribe) => paseo.agents.list({ filter: { includeArchived: false, includeBackground: true }, page: { limit: 200, cursor }, ...(subscribe ? { subscribe: {} } : {}) }),
+        (cursor, subscribe) => paseo.agents.list({ filter: AGENT_FILTER, page: { limit: 200, cursor }, ...(subscribe ? { subscribe: {} } : {}) }),
         {
             snapshot: entries => {
-              setAgents(recentFirst(entries.map(({ agent }) => agent).filter(agent => agent.workspaceId === workspaceId && !agent.archivedAt)));
+              setAgents(tabOrder(entries.map(({ agent }) => agent).filter(agent => agent.workspaceId === workspaceId && !agent.archivedAt)));
               setListFailed(false);
             },
             update: message => {
@@ -382,7 +411,7 @@ export function createSharePopover() {
                 const id = update.kind === 'upsert' ? update.agent.id : update.agentId;
                 const remaining = (current ?? []).filter(agent => agent.id !== id);
                 if (update.kind === 'upsert' && update.agent.workspaceId === workspaceId && !update.agent.archivedAt) remaining.push(update.agent);
-                return recentFirst(remaining);
+                return tabOrder(remaining);
               });
             },
             error: () => setListFailed(true),
@@ -397,21 +426,26 @@ export function createSharePopover() {
     return <View style={{ margin: -8, ...(layout.compact ? {} : { width: PANEL_WIDTH }) }}>
       {shares.lookupError && <View style={{ padding: 8, gap: 4 }}>
         <Text accessibilityRole="alert" style={{ color: colors.statusDanger, fontSize: 13, lineHeight: 18 }}>{shares.lookupError}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel="重试读取分享链接" onPress={() => void refreshLinks()} style={{ minHeight: actionHeight, justifyContent: 'center' }}>
+        <Pressable accessibilityRole="button" accessibilityLabel="重试读取分享链接" onPress={refresh} style={{ minHeight: actionHeight, justifyContent: 'center' }}>
           <Text style={{ color: colors.foreground, fontSize: 13 }}>重试</Text>
         </Pressable>
       </View>}
-      <Collapse open still={still}>
-        {listFailed ? <Text style={{ ...message, color: colors.statusDanger }}>读取会话失败，请重新打开。</Text>
+      {/* In normal flow, never animating height: the host's scroll viewport follows content height a frame late, and each overflow shows a scrollbar that widens the surface. */}
+      {listFailed ? <Text style={{ ...message, color: colors.statusDanger }}>读取会话失败，请重新打开。</Text>
           : agents === null ? <SkeletonRows colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} />
           : agents.length === 0 ? <Text style={{ ...message, color: colors.foregroundMuted }}>暂无会话</Text>
-          : <FadeIn still={still}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false}>{agents.map(agent =>
+          : <FadeIn still={still || reopened}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false}>{agents.map(agent =>
             <AgentRow key={agent.id} agent={agent} colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} phase={phaseOf(agent.id)}
-              shared={shares.links[agent.id]} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id} menuOpen={menuAgent === agent.id}
+              shared={shares.links[agent.id]} verdicts={verdicts} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id} menuOpen={menuAgent === agent.id}
               onMenu={() => setMenuAgent(current => current === agent.id ? null : agent.id)}
               onShare={locked => { setMenuAgent(null); void share(agent.id, locked); }}
               onCopy={shared => { setMenuAgent(null); void copy(agent.id, shared); }} />)}</ScrollView></FadeIn>}
-      </Collapse>
+      <Pressable accessibilityRole="button" accessibilityLabel="管理分享链接" onPress={() => setManaging(true)}
+        style={{ minHeight: layout.compact ? rowHeight : FOOTER_HEIGHT, marginTop: 4, borderTopWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
+        <Icon name="Link" size={14} color={colors.foregroundMuted} />
+        <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 13, lineHeight: 16 }}>管理分享链接</Text>
+      </Pressable>
+      <ManageSharesModal open={managing} onOpenChange={setManaging} colors={colors} compact={layout.compact} onChanged={() => refreshAfterDelete(() => lookup({}))} />
     </View>;
   };
 }

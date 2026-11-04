@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest';
-import { shareSession, uploadShare, resolveToken, ghToken, listShareLinks } from '../server/share';
+import { shareSession, uploadShare, resolveToken, ghToken, listShareLinks, listAllShareLinks, deleteShareLink } from '../server/share';
 import { execFile } from 'node:child_process';
 import contribute from '../index.server';
 import { MAX_SHARE_BYTES, SHARE_FILENAME, parseStoredShare, type LockedShare } from '../shared/format';
@@ -303,5 +303,113 @@ describe('snapshot discovery', () => {
     const handle = vi.fn();
     contribute({ registerSettings: () => ({ read: async () => ({ status: 'ready', values: { viewerUrl: 'ftp://bad' } }) }), handle } as unknown as PluginServerContext);
     await expect(handle.mock.calls[1]![1]({})).resolves.toEqual({ error: '查看器地址无效，请在插件设置中修改。' });
+  });
+});
+
+describe('listing every live link', () => {
+  const b = 'b'.repeat(32), c = 'c'.repeat(32);
+  it('keeps older links of a re-shared conversation and legacy Gists, newest first, and nothing unrelated', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify([
+      gist('chosen', 10, '2026-11-01T00:00:00Z', b), gist('chosen', 12, '2026-11-03T00:00:00Z'),
+      { ...gist('', 1, '2026-11-02T00:00:00Z', c), description: 'Chat-Share snapshot' },
+      { ...gist('public', 1, '2026-11-04T00:00:00Z', 'd'.repeat(32)), public: true },
+      { ...gist('wrong-file', 1, '2026-11-04T00:00:00Z', 'e'.repeat(32)), files: { 'other.json': {} } },
+      { ...gist('lookalike', 1, '2026-11-04T00:00:00Z', 'f'.repeat(32)), description: 'Chat-Share snapshots of my notes' },
+    ])));
+    await expect(listAllShareLinks(settings, { fetch, readGh: async () => token })).resolves.toEqual([
+      { gistId: id, url: `https://viewer.example/base/#owner/${id}`, createdAt: '2026-11-03T00:00:00Z', agentId: 'chosen' },
+      { gistId: c, url: `https://viewer.example/base/#owner/${c}`, createdAt: '2026-11-02T00:00:00Z' },
+      { gistId: b, url: `https://viewer.example/base/#owner/${b}`, createdAt: '2026-11-01T00:00:00Z', agentId: 'chosen' },
+    ]);
+  });
+  it('identifies the conversation for an encrypted share in management', async () => {
+    const item = gist('locked-agent');
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify([{ ...item, description: `${item.description} locked` }])));
+    const links = await listAllShareLinks(settings, { fetch, readGh: async () => token });
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({ gistId: id, agentId: 'locked-agent' });
+  });
+  it('gives each page its own time limit rather than sharing one across a large account', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch = vi.fn().mockImplementation(async (url: string) => {
+        await new Promise(done => setTimeout(done, 6_000));
+        return new Response(JSON.stringify(url.endsWith('page=3') ? [gist('late')] : Array.from({ length: 100 }, () => ({ description: 'unrelated' }))));
+      });
+      const listing = listAllShareLinks(settings, { fetch, readGh: async () => token });
+      await vi.advanceTimersByTimeAsync(18_000);
+      await expect(listing).resolves.toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+  it.each([
+    [403, { 'x-ratelimit-remaining': '0' }, '请求受限'], [403, { 'retry-after': '20' }, '请求受限'], [403, {}, 'gist 权限'],
+  ] as const)('tells a rate limit from a rejected token on HTTP %s %j', async (status, headers, expected) => {
+    const fetch = vi.fn().mockResolvedValue(new Response(token, { status, headers }));
+    await expect(listAllShareLinks(settings, { fetch, readGh: async () => token })).rejects.toThrow(expected);
+    await expect(listShareLinks(settings, { fetch: vi.fn().mockResolvedValue(new Response(token, { status, headers })), readGh: async () => token })).rejects.toThrow(expected);
+  });
+});
+
+describe('deleting a link', () => {
+  const dependencies = (...responses: Response[]) => {
+    const fetch = vi.fn();
+    for (const response of responses) fetch.mockResolvedValueOnce(response);
+    return { fetch, readGh: async () => token };
+  };
+  const found = (value: unknown = gist('chosen')) => new Response(JSON.stringify(value));
+  it('deletes a verified Chat-Share Gist', async () => {
+    const deps = dependencies(found(), new Response(null, { status: 204 }));
+    await deleteShareLink(id, deps);
+    expect(deps.fetch.mock.calls.map(([url, init]) => [url, init.method])).toEqual([[`https://api.github.com/gists/${id}`, undefined], [`https://api.github.com/gists/${id}`, 'DELETE']]);
+    expect(deps.fetch.mock.calls[1]![1].headers.Authorization).toBe(`Bearer ${token}`);
+  });
+  it('deletes a legacy Gist', async () => {
+    const deps = dependencies(found({ ...gist('x'), description: 'Chat-Share snapshot' }), new Response(null, { status: 204 }));
+    await deleteShareLink(id, deps);
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    ['another description', { ...gist('x'), description: 'my private notes' }],
+    ['a lookalike prefix', { ...gist('x'), description: 'Chat-Share snapshots of my notes' }],
+    ['a public Gist', { ...gist('x'), public: true }],
+    ['another file', { ...gist('x'), files: { 'notes.md': {} } }],
+  ])('never issues DELETE for %s', async (_kind, value) => {
+    const deps = dependencies(found(value));
+    await expect(deleteShareLink(id, deps)).rejects.toThrow('不是 Chat-Share');
+    expect(deps.fetch).toHaveBeenCalledOnce();
+  });
+  it.each(['../../user', `${id}/star`, '', 'a'.repeat(19)])('rejects a malformed id before any credential or request (%s)', async gistId => {
+    const fetch = vi.fn(), readGh = vi.fn();
+    await expect(deleteShareLink(gistId, { fetch, readGh })).rejects.toThrow('不是 Chat-Share');
+    expect(fetch).not.toHaveBeenCalled(); expect(readGh).not.toHaveBeenCalled();
+  });
+  it('counts a Gist already gone as deleted', async () => {
+    const deps = dependencies(new Response(null, { status: 404 }));
+    await expect(deleteShareLink(id, deps)).resolves.toBeUndefined();
+    expect(deps.fetch).toHaveBeenCalledOnce();
+  });
+  it('does not report success when DELETE answers 404, which is also how a token without the gist scope is refused', async () => {
+    await expect(deleteShareLink(id, dependencies(found(), new Response(null, { status: 404 })))).rejects.toThrow('gist 权限');
+  });
+  it.each([
+    [403, { 'retry-after': '60' }, '请求受限'], [429, {}, '请求受限'], [403, {}, 'gist 权限'], [500, {}, '服务器网络'],
+  ] as const)('reports a refused DELETE (%s %j) without leaking the response', async (status, headers, expected) => {
+    try { await deleteShareLink(id, dependencies(found(), new Response(token, { status, headers }))); expect.fail('Expected failure'); }
+    catch (error) { expect(String(error)).toContain(expected); expect(String(error)).not.toContain(token); }
+  });
+  it('maps a network failure without leaking its text', async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error(token));
+    try { await deleteShareLink(id, { fetch, readGh: async () => token }); expect.fail('Expected failure'); }
+    catch (error) { expect(String(error)).toContain('无法连接 GitHub'); expect(String(error)).not.toContain(token); }
+  });
+  it('returns typed RPC results and works with invalid viewer settings, since deleting needs no viewer', async () => {
+    const handle = vi.fn();
+    contribute({ registerSettings: () => ({ read: async () => ({ status: 'ready', values: { viewerUrl: 'ftp://bad' } }) }), handle } as unknown as PluginServerContext);
+    const handler = (name: string) => handle.mock.calls.find(([contract]) => contract.name === name)![1];
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 404 }));
+    await expect(handler('delete-share')({ gistId: id })).resolves.toEqual({ deleted: true });
+    await expect(handler('delete-share')({ gistId: 'nope' })).resolves.toEqual({ error: '这不是 Chat-Share 创建的 Gist，已拒绝删除。' });
+    await expect(handler('list-all-shares')({})).resolves.toEqual({ error: '查看器地址无效，请在插件设置中修改。' });
+    fetch.mockRestore();
   });
 });

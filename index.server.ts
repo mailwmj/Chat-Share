@@ -1,7 +1,7 @@
 import type { PluginServerContext } from '@getpaseo/plugin/server';
-import { listShares, preferences, shareAgent } from './shared/plugin';
+import { deleteShare, listAllShares, listShares, preferences, shareAgent } from './shared/plugin';
 import type { Refetch } from './shared/snapshot';
-import { listShareLinks, ShareFailure, shareSession } from './server/share';
+import { deleteShareLink, listAllShareLinks, listShareLinks, ShareFailure, shareSession } from './server/share';
 
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(preferences);
@@ -32,6 +32,23 @@ export default function contribute(server: PluginServerContext) {
       return { links: await listShareLinks(current.values) };
     } catch (error) {
       return { error: error instanceof ShareFailure ? error.message : '读取分享链接失败，请稍后重试。' };
+    }
+  });
+  server.handle(listAllShares, async () => {
+    try {
+      const current = await settings.read();
+      if (current.status !== 'ready') throw new ShareFailure('插件设置无效。请打开插件设置并重新保存。');
+      return { links: await listAllShareLinks(current.values) };
+    } catch (error) {
+      return { error: error instanceof ShareFailure ? error.message : '读取分享链接失败，请稍后重试。' };
+    }
+  });
+  server.handle(deleteShare, async ({ gistId }) => {
+    try {
+      await deleteShareLink(gistId);
+      return { deleted: true as const };
+    } catch (error) {
+      return { error: error instanceof ShareFailure ? error.message : '删除失败，请稍后重试。' };
     }
   });
   return () => {};
