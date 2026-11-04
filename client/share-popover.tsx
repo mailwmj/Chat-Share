@@ -4,6 +4,7 @@ import { usePaseo, useRpc, type PluginButtonContentProps, type PluginClientConte
 import { copyText, Icon, ScrollView, useToast } from '@getpaseo/plugin/client/ui';
 import { listShares, shareAgent, type SharedSnapshot } from '../shared/plugin';
 import { observeDirectory } from './directory';
+import { ManageSharesModal } from './manage-shares';
 import { providerIcon } from './provider-icons';
 
 type AgentDirectory = Awaited<ReturnType<PluginClientContext['paseo']['agents']['list']>>;
@@ -17,7 +18,7 @@ const nativeDriver = Platform.OS !== 'web';
 const fill = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as const;
 const COPIED_MS = 1600;
 // The host caps a popover surface at 420 x 440, with 12px of padding this panel pulls back by 8px.
-const PANEL_WIDTH = 404, LIST_MAX_HEIGHT = 416;
+const PANEL_WIDTH = 404, FOOTER_HEIGHT = 36, LIST_MAX_HEIGHT = 416 - FOOTER_HEIGHT - 1;
 const ACTION_WIDTH = 88, SWEEP_WIDTH = 36;
 
 function useReducedMotion() {
@@ -299,6 +300,8 @@ export function createSharePopover(preload?: LookupLinks) {
     } catch { store.lookupFailed(id, '读取分享链接失败，请稍后重试。'); }
   })().finally(() => { lookingUp = undefined; });
   if (preload) void refreshLinks(preload);
+  // A listing already under way may have read a Gist that has since been deleted, so look again once it ends.
+  const refreshAfterDelete = (lookup: LookupLinks) => void Promise.resolve(lookingUp).then(() => refreshLinks(lookup));
   return function SharePopover({ workspaceId, theme, layout }: PluginButtonContentProps) {
     const paseo = usePaseo(), rpc = useRpc(shareAgent), lookup = useRpc(listShares), toast = useToast(), colors = theme.colors, still = useReducedMotion();
     const shares = useSyncExternalStore(store.subscribe, store.get);
@@ -307,6 +310,7 @@ export function createSharePopover(preload?: LookupLinks) {
     const [listFailed, setListFailed] = useState(false);
     const [copied, setCopied] = useState<string | null>(null);
     const [copyFailed, setCopyFailed] = useState<string | null>(null);
+    const [managing, setManaging] = useState(false);
     const copiedTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
     const open = useRef(false);
     const refresh = () => void refreshLinks(() => lookup({}));
@@ -388,6 +392,12 @@ export function createSharePopover(preload?: LookupLinks) {
               shared={shares.links[agent.id]} verdicts={verdicts} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id}
               onShare={() => void share(agent.id)} onCopy={url => void copy(agent.id, url)} />)}</ScrollView></FadeIn>}
       </Collapse>
+      <Pressable accessibilityRole="button" accessibilityLabel="管理分享链接" onPress={() => setManaging(true)}
+        style={{ minHeight: layout.compact ? rowHeight : FOOTER_HEIGHT, marginTop: 4, borderTopWidth: 1, borderColor: colors.border, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
+        <Icon name="Link" size={14} color={colors.foregroundMuted} />
+        <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 13, lineHeight: 16 }}>管理分享链接</Text>
+      </Pressable>
+      <ManageSharesModal open={managing} onOpenChange={setManaging} colors={colors} compact={layout.compact} onChanged={() => refreshAfterDelete(() => lookup({}))} />
     </View>;
   };
 }
