@@ -18,3 +18,9 @@ export function visibleRange(view: unknown): { top: number; bottom: number } | u
   }
   return { top: top - rect.top, bottom: bottom - rect.top };
 }
+
+/** Prefer the space below, flip above when needed, then keep the menu within the visible range. */
+export function menuPosition(below: number, above: number, height: number, top: number, bottom: number) {
+  const preferred = below + height <= bottom || above < top ? below : above;
+  return Math.max(top, Math.min(preferred, bottom - height));
+}

@@ -7,7 +7,7 @@ import { listShares, shareAgent, type SharedSnapshot } from '../shared/plugin';
 import { observeDirectory } from './directory';
 import { ManageSharesModal } from './manage-shares';
 import { providerIcon } from './provider-icons';
-import { visibleRange } from './web';
+import { menuPosition, visibleRange } from './web';
 
 type AgentDirectory = Awaited<ReturnType<PluginClientContext['paseo']['agents']['list']>>;
 type PaseoAgent = AgentDirectory['entries'][number]['agent'];
@@ -431,8 +431,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
     const menuBelow = menu ? listY + menu.y - scrollY.current + (rowHeight + actionHeight) / 2 + 4 : 0;
     const menuAbove = menu ? listY + menu.y - scrollY.current + (rowHeight - actionHeight) / 2 - menuHeight - 4 : 0;
     const visibleTop = Math.max(0, bounds?.top ?? 0), visibleBottom = Math.min(panelHeight, bounds?.bottom ?? panelHeight);
-    const preferredTop = menuBelow + menuHeight <= visibleBottom || menuAbove < visibleTop ? menuBelow : menuAbove;
-    const menuTop = Math.max(visibleTop, Math.min(preferredTop, visibleBottom - menuHeight));
+    const menuTop = menuPosition(menuBelow, menuAbove, menuHeight, visibleTop, visibleBottom);
     const message = { paddingHorizontal: 8, paddingVertical: 8, fontSize: 13, lineHeight: 18 };
     const phaseOf = (agentId: string): Phase => shares.pending.has(agentId) ? 'pending'
       : copied === agentId ? 'copied'
