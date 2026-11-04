@@ -10,7 +10,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(shareAgent, async ({ agentId, locked }, { paseo }) => {
     try {
       const current = await settings.read();
-      if (current.status !== 'ready') throw new ShareFailure('插件设置无效。请打开插件设置并重新保存。');
+      if (current.status !== 'ready') throw new ShareFailure('插件设置无效。');
       return await shareSession(current.values, async () => {
         const agent = paseo.agents.ref(agentId);
         const data = (await agent.refresh())?.agent;
@@ -28,7 +28,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(listShares, async () => {
     try {
       const current = await settings.read();
-      if (current.status !== 'ready') throw new ShareFailure('插件设置无效。请打开插件设置并重新保存。');
+      if (current.status !== 'ready') throw new ShareFailure('插件设置无效。');
       return { links: await listShareLinks(current.values) };
     } catch (error) {
       return { error: error instanceof ShareFailure ? error.message : '读取分享链接失败，请稍后重试。' };
@@ -37,7 +37,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(listAllShares, async () => {
     try {
       const current = await settings.read();
-      if (current.status !== 'ready') throw new ShareFailure('插件设置无效。请打开插件设置并重新保存。');
+      if (current.status !== 'ready') throw new ShareFailure('插件设置无效。');
       return { links: await listAllShareLinks(current.values) };
     } catch (error) {
       return { error: error instanceof ShareFailure ? error.message : '读取分享链接失败，请稍后重试。' };

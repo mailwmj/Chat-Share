@@ -18,7 +18,7 @@
 | 有效期 | 长期有效，发送方在分享面板底部的「管理分享链接」或到 GitHub 删除 Gist 来撤回；删除后链接约 5 分钟才失效，已下载或已打开的副本不受影响。明文改为加密时旧链接仍可打开，需要手动删除 |
 | 管理 | 浮层列出当前 `gh` 账号下所有 Chat-Share 链接，不分 workspace，每个链接一行，从新到旧；支持多选批量删除，删除前需确认，且无法恢复。服务端删除前会再次核对 Gist 符合 Chat-Share 的格式（secret、含 `chat-share.json`、描述前缀匹配）；GitHub 不记录创建来源，手工仿造的同格式 Gist 无法区分。 |
 | 上限 | 10 MB（10,000,000 字节）；超过就显示大小并报错，绝不悄悄丢内容 |
-| 查看器 | 默认 `https://chat-share.pages.dev`；插件设置可覆盖地址，留空或清空恢复默认 |
+| 查看器 | 默认 `https://chat-share.pages.dev`；保留已有的自定义查看器地址 |
 | 链接 | `https://<查看器>.pages.dev/#<GitHub用户名>/<gistID>`，浏览器直接读 Gist raw 地址，不走 GitHub API |
 | 发布 | 先通过 `paseo plugin install github:…` 在团队内试用，稳定后再提交 paseo.sh |
 | 语言 | 查看器和插件面板跟随客户端语言，支持简体中文和英文，其他语言默认英文 |

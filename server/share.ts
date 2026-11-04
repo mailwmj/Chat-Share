@@ -16,7 +16,7 @@ export class ShareFailure extends Error {}
 const messages = {
   login: '请在服务器安装 GitHub CLI（gh），并运行 gh auth login 登录。',
   token: 'GitHub token 被拒绝或缺少 gist 权限。请重新运行 gh auth login 授权。',
-  viewer: '查看器地址无效，请在插件设置中修改。',
+  viewer: '查看器地址无效。',
   snapshot: '读取会话快照失败。请稍后重试。',
   network: '无法连接 GitHub 或读取上传结果。请检查服务器网络后重试。',
   rate: 'GitHub 请求受限。请等待限流解除后重试。',

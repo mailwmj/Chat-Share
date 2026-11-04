@@ -239,7 +239,7 @@ describe('plugin RPC wiring', () => {
     contribute({ registerSettings: () => ({ read }), handle } as unknown as PluginServerContext);
     expect(read).toHaveBeenCalledOnce();
     const handler = handle.mock.calls[0]![1], ref = vi.fn();
-    await expect(handler({ agentId: 'chosen' }, { paseo: { agents: { ref } } })).resolves.toEqual({ error: '查看器地址无效，请在插件设置中修改。' });
+    await expect(handler({ agentId: 'chosen' }, { paseo: { agents: { ref } } })).resolves.toEqual({ error: '查看器地址无效。' });
     expect(ref).not.toHaveBeenCalled();
     read.mockRejectedValueOnce(new Error(token));
     await expect(handler({ agentId: 'chosen' }, {})).resolves.toEqual({ error: '分享失败，请稍后重试。' });
@@ -302,7 +302,7 @@ describe('snapshot discovery', () => {
   it('returns a typed lookup error instead of falsely claiming no links exist', async () => {
     const handle = vi.fn();
     contribute({ registerSettings: () => ({ read: async () => ({ status: 'ready', values: { viewerUrl: 'ftp://bad' } }) }), handle } as unknown as PluginServerContext);
-    await expect(handle.mock.calls[1]![1]({})).resolves.toEqual({ error: '查看器地址无效，请在插件设置中修改。' });
+    await expect(handle.mock.calls[1]![1]({})).resolves.toEqual({ error: '查看器地址无效。' });
   });
 });
 
@@ -409,7 +409,7 @@ describe('deleting a link', () => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 404 }));
     await expect(handler('delete-share')({ gistId: id })).resolves.toEqual({ deleted: true });
     await expect(handler('delete-share')({ gistId: 'nope' })).resolves.toEqual({ error: '这不是 Chat-Share 创建的 Gist，已拒绝删除。' });
-    await expect(handler('list-all-shares')({})).resolves.toEqual({ error: '查看器地址无效，请在插件设置中修改。' });
+    await expect(handler('list-all-shares')({})).resolves.toEqual({ error: '查看器地址无效。' });
     fetch.mockRestore();
   });
 });
