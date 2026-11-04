@@ -267,6 +267,8 @@ test('reader preferences: theme, font-size, width, and chat-only filter toggle c
   const lgBtn = popover.getByRole('button', { name: 'Comfortable', exact: true });
   await lgBtn.click();
   expect(await page.evaluate(() => document.documentElement.dataset.fontSize)).toBe('lg');
+  const assistantFontSize = await page.locator('.message.assistant .markdown').first().evaluate(el => window.getComputedStyle(el).fontSize);
+  expect(assistantFontSize).toBe('16.5px');
 
   // Test Width toggle to 'wide' (Wide)
   const wideBtn = popover.getByRole('button', { name: 'Wide', exact: true });
@@ -287,25 +289,31 @@ test('reader preferences: theme, font-size, width, and chat-only filter toggle c
   await expect(popover).toBeHidden();
 });
 
-test('table of contents drawer opens, navigates to question, and closes', async ({ page }) => {
+test('side dash outline navigates to question with tooltip and highlight pulse, hidden on mobile', async ({ page }) => {
   await page.goto(`/?preview=design${fragment}`);
   await expect(page.locator('.timeline')).toBeVisible();
 
-  const tocBtn = page.locator('.toc-btn');
-  await expect(tocBtn).toBeVisible();
-  await tocBtn.click();
+  const sideNav = page.locator('.side-outline-nav');
+  await expect(sideNav).toBeVisible();
 
-  const drawer = page.locator('.toc-drawer');
-  await expect(drawer).toBeVisible();
+  const items = sideNav.locator('.side-dash-item');
+  const count = await items.count();
+  expect(count).toBeGreaterThan(0);
 
-  const items = drawer.locator('.toc-item');
-  expect(await items.count()).toBeGreaterThan(0);
+  // Hover first dash - bubble tooltip becomes visible with question snippet
+  const firstItem = items.first();
+  await firstItem.hover();
+  const bubble = firstItem.locator('.side-dash-bubble');
+  await expect(bubble).toBeVisible();
 
-  // Click first question
-  await items.first().click();
-  await expect(drawer).toBeHidden();
+  // Click first question dash
+  await firstItem.click();
 
   // Target message receives highlight pulse
   const firstUserMsg = page.locator('.message.user').first();
   await expect(firstUserMsg).toHaveClass(/highlight-target/);
+
+  // Responsive: On mobile viewport (<768px), side nav is hidden
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(sideNav).toBeHidden();
 });

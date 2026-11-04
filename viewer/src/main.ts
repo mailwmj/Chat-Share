@@ -1,7 +1,7 @@
 import './style.css';
 import { ShareError, type ShareDocument, type TimelineEntry } from '../../shared/format';
 import { downloadMarkdown } from '../../shared/download';
-import { browserLocale, messages, questionsCountText } from './i18n';
+import { browserLocale, messages } from './i18n';
 import { element, renderTimeline, createIcon } from './render';
 import { loadShare } from './load';
 
@@ -87,52 +87,33 @@ export function showShare(share: ShareDocument): void {
     }
   });
 
-  // Table of Contents Drawer
-  let tocBtn: HTMLButtonElement | undefined;
-  let tocBackdrop: HTMLElement | undefined;
-  let tocDrawer: HTMLElement | undefined;
+  // Side Dash Outline Navigation
+  let sideNav: HTMLElement | undefined;
+  const dashButtons: HTMLButtonElement[] = [];
 
   if (userEntries.length > 0) {
-    tocBtn = element('button', 'button icon-btn toc-btn');
-    tocBtn.type = 'button';
-    tocBtn.setAttribute('aria-label', t.tableOfContents);
-    tocBtn.title = t.tableOfContents;
-    const tocSr = element('span', 'sr-only', t.tableOfContents);
-    tocBtn.append(createIcon('toc', 16), tocSr);
-
-    tocBackdrop = element('div', 'toc-backdrop');
-    tocBackdrop.hidden = true;
-    tocDrawer = element('aside', 'toc-drawer');
-    tocDrawer.hidden = true;
-    tocDrawer.setAttribute('role', 'dialog');
-    tocDrawer.setAttribute('aria-label', t.tableOfContents);
-
-    const tocHeader = element('div', 'toc-header');
-    const tocHeaderLeft = element('div', 'toc-header-left');
-    const tocTitle = element('span', 'toc-title', t.tableOfContents);
-    const tocCount = element('span', 'toc-count', questionsCountText(userEntries.length, locale));
-    tocHeaderLeft.append(tocTitle, tocCount);
-
-    const tocClose = element('button', 'toc-close');
-    tocClose.type = 'button';
-    tocClose.setAttribute('aria-label', t.close);
-    tocClose.append(createIcon('close', 14));
-    tocHeader.append(tocHeaderLeft, tocClose);
-
-    const tocList = element('div', 'toc-list');
-    tocList.setAttribute('role', 'list');
+    sideNav = element('nav', 'side-outline-nav');
+    sideNav.setAttribute('aria-label', t.tableOfContents);
 
     userEntries.forEach((item, i) => {
-      const tocItem = element('button', 'toc-item');
-      tocItem.type = 'button';
-      tocItem.setAttribute('role', 'listitem');
-      const badge = element('span', 'toc-badge', `Q${i + 1}`);
-      const cleanSnippet = item.text.replace(/^[#\s*`>_~-]+/gm, '').trim().slice(0, 50) || t.untitled;
-      const textSpan = element('span', 'toc-snippet', cleanSnippet);
-      tocItem.append(badge, textSpan);
+      const dashBtn = element('button', 'side-dash-item') as HTMLButtonElement;
+      dashBtn.type = 'button';
+      dashBtn.setAttribute('data-entry-index', String(item.index));
+      const cleanSnippet = item.text
+        .replace(/^[#\s*`>_~-]+/gm, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60) || t.untitled;
+      dashBtn.setAttribute('aria-label', `Q${i + 1}: ${cleanSnippet}`);
 
-      tocItem.addEventListener('click', () => {
-        closeToc();
+      const bar = element('span', 'side-dash-bar');
+      const bubble = element('div', 'side-dash-bubble');
+      const badge = element('span', 'side-dash-badge', `Q${i + 1}`);
+      const textSpan = element('span', 'side-dash-text', cleanSnippet);
+      bubble.append(badge, textSpan);
+      dashBtn.append(bar, bubble);
+
+      dashBtn.addEventListener('click', () => {
         const target = document.getElementById(`entry-${item.index}`);
         if (target) {
           target.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -142,16 +123,27 @@ export function showShare(share: ShareDocument): void {
           setTimeout(() => target.classList.remove('highlight-target'), 2000);
         }
       });
-      tocList.append(tocItem);
+
+      sideNav!.append(dashBtn);
+      dashButtons.push(dashBtn);
     });
+  }
 
-    tocDrawer.append(tocHeader, tocList);
-
-    const openToc = () => { tocBackdrop!.hidden = false; tocDrawer!.hidden = false; };
-    const closeToc = () => { tocBackdrop!.hidden = true; tocDrawer!.hidden = true; };
-    tocBtn.addEventListener('click', openToc);
-    tocClose.addEventListener('click', closeToc);
-    tocBackdrop.addEventListener('click', closeToc);
+  function updateActiveDash() {
+    if (dashButtons.length === 0) return;
+    let currentIdx = 0;
+    for (let i = 0; i < userEntries.length; i++) {
+      const el = document.getElementById(`entry-${userEntries[i]!.index}`);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.top <= window.innerHeight * 0.45) {
+          currentIdx = i;
+        }
+      }
+    }
+    dashButtons.forEach((btn, idx) => {
+      btn.classList.toggle('active', idx === currentIdx);
+    });
   }
 
   // 1. Expand / Collapse All Button
@@ -335,10 +327,6 @@ export function showShare(share: ShareDocument): void {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       popover.hidden = true;
-      if (tocBackdrop && tocDrawer) {
-        tocBackdrop.hidden = true;
-        tocDrawer.hidden = true;
-      }
     }
   });
 
@@ -457,6 +445,7 @@ export function showShare(share: ShareDocument): void {
         } else {
           backToTop.classList.remove('visible');
         }
+        updateActiveDash();
         scrollTicking = false;
       });
       scrollTicking = true;
@@ -464,15 +453,15 @@ export function showShare(share: ShareDocument): void {
   }, { passive: true });
 
   actions.append(expand, themeToggle, readerBtn, download);
-  if (tocBtn) titleGroup.append(tocBtn);
   titleGroup.append(heading);
   inner.append(titleGroup, actions, popover);
   header.append(inner);
 
   app.replaceChildren(header, timeline, backToTop);
-  if (tocBackdrop && tocDrawer) {
-    app.append(tocBackdrop, tocDrawer);
+  if (sideNav) {
+    app.append(sideNav);
   }
+  updateActiveDash();
 }
 
 function showState(message: string, retry = false): void {

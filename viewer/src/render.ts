@@ -2,7 +2,7 @@ import { editLines, toolSummary } from '../../shared/tools';
 export { editLines, toolSummary } from '../../shared/tools';
 import { isObject, type ShareDocument, type TimelineEntry } from '../../shared/format';
 import { highlighted, markdownRenderer } from './markdown';
-import { failedCountText, type Locale, type Translations } from './i18n';
+import { type Locale, type Translations } from './i18n';
 
 export function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -580,24 +580,6 @@ export function renderTimeline(share: ShareDocument, t: Translations): HTMLEleme
       article.setAttribute('data-entry-index', String(index));
       article.setAttribute('aria-label', isUser ? t.you : t.assistant);
 
-      const msgFooter = element('div', 'message-footer');
-      const copyBtn = element('button', 'copy-msg-btn');
-      copyBtn.type = 'button';
-      copyBtn.setAttribute('aria-label', t.copyMessage);
-      copyBtn.title = t.copyMessage;
-      copyBtn.append(createIcon('copy', 13));
-      copyBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(string(item.text));
-          copyBtn.replaceChildren(createIcon('check', 13));
-          setTimeout(() => copyBtn.replaceChildren(createIcon('copy', 13)), 1500);
-        } catch {
-          // ignore
-        }
-      });
-      msgFooter.append(copyBtn);
-
       if (isUser) {
         const text = string(item.text);
         const proseNode = prose(text);
@@ -614,12 +596,12 @@ export function renderTimeline(share: ShareDocument, t: Translations): HTMLEleme
             const clamped = article.classList.toggle('clamped');
             showFullBtn.textContent = clamped ? t.showFull : t.showLess;
           });
-          article.append(clampWrapper, showFullBtn, msgFooter, ...marks(index));
+          article.append(clampWrapper, showFullBtn, ...marks(index));
         } else {
-          article.append(proseNode, msgFooter, ...marks(index));
+          article.append(proseNode, ...marks(index));
         }
       } else {
-        article.append(prose(string(item.text)), msgFooter, ...marks(index));
+        article.append(prose(string(item.text)), ...marks(index));
       }
       timeline.append(article);
       index++;
@@ -681,14 +663,6 @@ export function renderTimeline(share: ShareDocument, t: Translations): HTMLEleme
         label.textContent = stepSummary(runEntries.map(r => r.entry), locale);
         summary.append(iconSlot, label);
 
-        if (failedCount > 0) {
-          const failedBadge = element(
-            'span',
-            'badge failed-badge',
-            failedCountText(failedCount, locale)
-          );
-          summary.append(failedBadge);
-        }
 
         const truncsInRun = runEntries.flatMap(r => share.truncations.filter(m => m.entry === r.index));
         if (truncsInRun.length > 0) {

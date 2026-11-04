@@ -236,11 +236,16 @@ describe('merged step runs and boundary conditions', () => {
     expect(merged).toBeDefined();
     expect(merged.open).toBe(false);
 
-    // While collapsed, merged summary must show failure count and truncation badge
+    // While collapsed, outer merged summary should NOT show failure badge
     const summary = merged.querySelector('summary')!;
-    const failedBadge = summary.querySelector('.failed-badge');
-    expect(failedBadge).not.toBeNull();
-    expect(failedBadge!.textContent).toContain('1 failed');
+    expect(summary.querySelector('.failed-badge')).toBeNull();
+
+    // The individual failed tool step inside merged has the failed badge
+    const failedStep = merged.querySelector('.timeline-row.step-row.failed')!;
+    expect(failedStep).not.toBeNull();
+    const subBadge = failedStep.querySelector('.failed-badge');
+    expect(subBadge).not.toBeNull();
+    expect(subBadge!.textContent).toBe(messages.en.failed);
 
     const truncBadge = summary.querySelector('.truncation');
     expect(truncBadge).not.toBeNull();
@@ -249,7 +254,9 @@ describe('merged step runs and boundary conditions', () => {
     // When in Chinese
     const nodeZh = renderTimeline(share, messages.zh);
     const mergedZh = nodeZh.querySelector('.timeline-row.merged-row')!;
-    expect(mergedZh.querySelector('.failed-badge')?.textContent).toContain('1 次失败');
+    expect(mergedZh.querySelector('summary')!.querySelector('.failed-badge')).toBeNull();
+    const failedStepZh = mergedZh.querySelector('.timeline-row.step-row.failed')!;
+    expect(failedStepZh.querySelector('.failed-badge')?.textContent).toBe(messages.zh.failed);
     expect(mergedZh.querySelector('.truncation')?.textContent).toBe(messages.zh.truncated);
   });
 
@@ -552,20 +559,5 @@ describe('user message clamping and detail panels', () => {
       expect(el.tagName.toLowerCase()).toBe('svg');
       expect(el.classList.contains(`icon-${icon}`)).toBe(true);
     }
-  });
-
-  it('renders copy button in message footer with clipboard action', async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
-
-    const share = toShare(session, snapshot, [entry({ type: 'user_message', text: 'Hello world' })]);
-    const node = renderTimeline(share, messages.en);
-    document.body.append(node);
-
-    const msg = node.querySelector('.message.user')!;
-    const copyBtn = msg.querySelector<HTMLButtonElement>('.copy-msg-btn')!;
-    expect(copyBtn).not.toBeNull();
-    copyBtn.click();
-    expect(writeText).toHaveBeenCalledWith('Hello world');
   });
 });
