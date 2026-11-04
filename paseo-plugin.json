@@ -2,6 +2,9 @@
   "id": "chat-share",
   "name": "Chat-Share",
   "description": "Share conversations for viewing and downloading in a browser.",
+  "translations": {
+    "zh-CN": { "description": "分享对话，供他人在浏览器中查看和下载。" }
+  },
   "requirements": { "paseo": ">=0.14.0" },
   "build": [["npm", "ci", "--omit=dev", "--ignore-scripts"]]
 }
