@@ -21,7 +21,7 @@ const fill = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as c
 const COPIED_MS = 1600;
 // The host caps a popover surface at 420 x 440, with 12px of padding this panel pulls back by 8px.
 const PANEL_WIDTH = 404, LIST_MAX_HEIGHT = 416;
-const ACTION_WIDTH = 76, ACTION_GAP = 0, SWEEP_WIDTH = 36;
+const ACTION_WIDTH = 88, ACTION_GAP = 0, SWEEP_WIDTH = 36;
 
 const shareText = (shared: SharedSnapshot) => shared.locked && shared.password ? `${shared.url}\n${t('密码：', 'Password: ')}${shared.password}` : shared.url;
 
@@ -75,7 +75,7 @@ function FadeIn({ still, delay = 0, children }: { still: boolean; delay?: number
 function FaceMotion({ shown, still, children }: { shown: boolean; still: boolean; children: ReactNode }) {
   const opacity = useTween(shown ? 1 : 0, shown ? 150 : 80, still, { from: 0, delay: shown ? 50 : 0 });
   const rise = useTween(shown ? 0 : -4, shown ? 180 : 80, still, { from: 4 });
-  return <Animated.View pointerEvents="none" aria-hidden={!shown} style={{ ...fill, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, opacity, transform: [{ translateY: rise }] }}>{children}</Animated.View>;
+  return <Animated.View pointerEvents="none" aria-hidden={!shown} style={{ ...fill, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 8, zIndex: 1, opacity, transform: [{ translateY: rise }] }}>{children}</Animated.View>;
 }
 
 /** One state of the action. The outgoing face lifts away while the next rises into the same fixed box. */
@@ -98,7 +98,7 @@ function Sweep({ colors, still }: { colors: Colors; still: boolean }) {
   const travel = useLoop(1100, still, settle);
   const translateX = travel.interpolate({ inputRange: [0, 1], outputRange: [-SWEEP_WIDTH, ACTION_WIDTH] });
   if (still) return null;
-  return <Animated.View pointerEvents="none" style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: SWEEP_WIDTH, backgroundColor: colors.foreground, opacity: 0.08, transform: [{ translateX }] }} />;
+  return <Animated.View pointerEvents="none" style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: SWEEP_WIDTH, backgroundColor: colors.foreground, opacity: 0.08, zIndex: 0, transform: [{ translateX }] }} />;
 }
 
 function CheckMark({ colors, still }: { colors: Colors; still: boolean }) {
@@ -126,8 +126,8 @@ function ShareAction({ colors, height, still: reduced, phase, locked, title, onP
     <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled, busy: phase === 'pending' }} disabled={disabled} onPress={onPress}
       onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)} onPressIn={() => setDown(true)} onPressOut={() => setDown(false)}
       style={{ width: ACTION_WIDTH, height, overflow: 'hidden' }}>
-      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash }} />
-      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.foreground, opacity: lift }} />
+      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash, zIndex: 0 }} />
+      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.foreground, opacity: lift, zIndex: 0 }} />
       {sweep && <Sweep colors={colors} still={still} />}
       <Face shown={phase === 'checking'} still={still}><Label colors={colors}>{t('检查中', 'Checking')}</Label></Face>
       <Face shown={phase === 'share' && !locked} still={still}><Icon name="Share" size={14} color={colors.foregroundMuted} /><Label colors={colors}>{t('分享', 'Share')}</Label></Face>
@@ -187,8 +187,10 @@ function MenuToggle({ colors, size, still, disabled, open, title, onPress }: { c
     <Pressable accessibilityRole="button" accessibilityLabel={t(`更多分享方式 ${title}`, `More sharing options for ${title}`)} accessibilityState={{ disabled, expanded: open }} disabled={disabled} onPress={onPress}
       onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
       style={{ width: size, height: size, borderLeftWidth: 1, borderColor: colors.border, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
-      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash }} />
-      <Icon name="Ellipsis" size={16} color={colors.foregroundMuted} />
+      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash, zIndex: 0 }} />
+      <View pointerEvents="none" style={{ position: 'relative', zIndex: 1, alignItems: 'center', justifyContent: 'center' }}>
+        <Icon name="Ellipsis" size={16} color={hovered || open ? colors.foreground : colors.foregroundMuted} />
+      </View>
     </Pressable>
   </Animated.View>;
 }
@@ -198,8 +200,10 @@ function MenuItem({ colors, height, still, label, title, onPress }: { colors: Co
   const wash = useTween(hovered ? 1 : 0, hovered ? 80 : 160, still);
   return <Pressable accessibilityRole="button" accessibilityLabel={title ? `${label} ${title}` : label} onPress={onPress} onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
     style={{ minWidth: ACTION_WIDTH + ACTION_GAP + height, height, borderRadius: 4, overflow: 'hidden', justifyContent: 'center', paddingHorizontal: 10 }}>
-    <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash }} />
-    <Label colors={colors}>{label}</Label>
+    <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash, zIndex: 0 }} />
+    <View pointerEvents="none" style={{ position: 'relative', zIndex: 1 }}>
+      <Label colors={colors}>{label}</Label>
+    </View>
   </Pressable>;
 }
 
@@ -244,7 +248,7 @@ function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, v
 
 function SkeletonRows({ colors, height, actionHeight, still }: { colors: Colors; height: number; actionHeight: number; still: boolean }) {
   return <FadeIn still={still} delay={120}>
-    <View accessibilityLabel={t('正在读取会话…', 'Loading conversations…')} style={{ gap: 2 }}>
+    <View accessibilityLabel={t('正在读取会话…', 'Loading conversations…')} style={{ gap: 2, paddingVertical: 4 }}>
       {[62, 44, 54].map(width => <View key={width} style={{ height, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
         <View style={{ width: 16, height: 16, borderRadius: 4, backgroundColor: colors.surface2 }} />
         <View style={{ flex: 1 }}><View style={{ width: `${width}%`, height: 8, borderRadius: 4, backgroundColor: colors.surface2 }} /></View>
@@ -448,7 +452,7 @@ export function createSharePopover(preload?: LookupLinks, preloadAgents?: () => 
       {listFailed ? <Text style={{ ...message, color: colors.statusDanger }}>{t('读取会话失败，请重新打开。', 'Could not load conversations. Reopen this menu.')}</Text>
           : agents === null ? <SkeletonRows colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} />
           : agents.length === 0 ? <Text style={{ ...message, color: colors.foregroundMuted }}>{t('暂无会话', 'No conversations')}</Text>
-          : <View onLayout={event => setListY(event.nativeEvent.layout.y)}><FadeIn still={still || reopened}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false} onScroll={event => { scrollY.current = event.nativeEvent.contentOffset.y; setMenu(null); }} scrollEventThrottle={16}>{agents.map(agent =>
+          : <View onLayout={event => setListY(event.nativeEvent.layout.y)}><FadeIn still={still || reopened}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2, paddingVertical: 4 }} bounces={false} onScroll={event => { scrollY.current = event.nativeEvent.contentOffset.y; setMenu(null); }} scrollEventThrottle={16}>{agents.map(agent =>
             <AgentRow key={agent.id} agent={agent} colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} phase={phaseOf(agent.id)}
               shared={shares.links[agent.id]} verdicts={verdicts} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id} menuOpen={menu?.agentId === agent.id}
               onMenu={(y, title, options) => { setBounds(visibleRange(panelRef.current)); setMenu(current => current?.agentId === agent.id ? null : { agentId: agent.id, y, title, options }); }}
