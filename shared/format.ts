@@ -33,27 +33,60 @@ export interface ShareDocument {
   truncations: Truncation[];
 }
 
+/** A ShareDocument encrypted with a 6-digit password. Everything sensitive, including the title, is inside `data`. */
+export interface LockedShare {
+  version: 2;
+  kdf: { name: 'PBKDF2-SHA256'; iterations: number; salt: string };
+  cipher: { name: 'AES-256-GCM'; iv: string };
+  data: string;
+}
+
 export const MAX_SHARE_BYTES = 10_000_000;
 export const SHARE_FILENAME = 'chat-share.json';
 export const LOCAL_IMAGE_MARKER = '[local image omitted]';
+export const SHARE_PASSWORD = /^\d{6}$/;
+export const PBKDF2_ITERATIONS = 1_000_000;
 
 export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export class ShareError extends Error {
-  constructor(public readonly code: 'invalid' | 'oversized' | 'not-found' | 'load' | 'snapshot', public readonly bytes?: number) {
+  constructor(public readonly code: 'invalid' | 'oversized' | 'not-found' | 'load' | 'snapshot' | 'password', public readonly bytes?: number) {
     super(code);
     this.name = 'ShareError';
   }
 }
 
-/** External JSON boundary: reject unsupported versions and unsafe resource depth, retain new fields. */
-export function parseShare(text: string): ShareDocument {
+function parseJson(text: string): unknown {
   const bytes = new TextEncoder().encode(text).byteLength;
   if (bytes > MAX_SHARE_BYTES) throw new ShareError('oversized', bytes);
-  let value: unknown;
-  try { value = JSON.parse(text); } catch { throw new ShareError('invalid'); }
+  try { return JSON.parse(text); } catch { throw new ShareError('invalid'); }
+}
+
+export function parseShare(text: string): ShareDocument {
+  return validateShare(parseJson(text));
+}
+
+/** What a Gist holds: a readable share, or one that needs a password first. */
+export function parseStoredShare(text: string): ShareDocument | LockedShare {
+  const value = parseJson(text);
+  return isObject(value) && value.version === 2 ? validateLocked(value) : validateShare(value);
+}
+
+const isBase64 = (value: unknown, length?: number): value is string => typeof value === 'string' && value.length % 4 === 0
+  && (length === undefined || value.length === length) && /^[A-Za-z\d+/]+={0,2}$/.test(value);
+
+/** Fixed parameters: an untrusted Gist must not be able to choose a cost that hangs the reader's browser. */
+function validateLocked(value: Record<string, unknown>): LockedShare {
+  const { kdf, cipher, data } = value;
+  if (!isObject(kdf) || kdf.name !== 'PBKDF2-SHA256' || kdf.iterations !== PBKDF2_ITERATIONS || !isBase64(kdf.salt, 24)
+    || !isObject(cipher) || cipher.name !== 'AES-256-GCM' || !isBase64(cipher.iv, 16) || !isBase64(data)) throw new ShareError('invalid');
+  return value as unknown as LockedShare;
+}
+
+/** External JSON boundary: reject unsupported versions and unsafe resource depth, retain new fields. */
+function validateShare(value: unknown): ShareDocument {
   if (!isObject(value) || value.version !== 1 || !isObject(value.session) || !isObject(value.snapshot)
     || !Array.isArray(value.entries) || !Array.isArray(value.truncations)) throw new ShareError('invalid');
   const session = value.session;

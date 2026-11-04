@@ -3,7 +3,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { shareSession, uploadShare, resolveToken, ghToken, listShareLinks } from '../server/share';
 import { execFile } from 'node:child_process';
 import contribute from '../index.server';
-import { MAX_SHARE_BYTES, SHARE_FILENAME } from '../shared/format';
+import { MAX_SHARE_BYTES, SHARE_FILENAME, parseStoredShare, type LockedShare } from '../shared/format';
+import { deriveShareKey, openLockedShare } from '../shared/encryption';
+import { filePasswordStore, type PasswordStore } from '../server/passwords';
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { maliciousShare, session, snapshot, entry } from './fixtures';
 import type { PluginServerContext } from '@getpaseo/plugin/server';
 
@@ -94,6 +99,91 @@ describe('private, complete Gist upload', () => {
   });
 });
 
+describe('encrypted upload', () => {
+  const memory = (): PasswordStore & { saved: Record<string, string> } => {
+    const saved: Record<string, string> = {};
+    return { saved, read: async () => saved, save: async (gistId, password) => { saved[gistId] = password; } };
+  };
+  it('uploads nothing readable, generates a 6-digit password, and the reader can open it with that password', async () => {
+    const fetch = vi.fn().mockResolvedValue(ok()), passwords = memory();
+    const result = await shareSession(settings, source, { fetch, readGh: async () => token, passwords }, true);
+    expect(result.locked).toBe(true); expect(result.password).toMatch(/^\d{6}$/);
+    expect(passwords.saved).toEqual({ [id]: result.password });
+    const body = JSON.parse(fetch.mock.calls[0]![1].body), content: string = body.files[SHARE_FILENAME].content;
+    expect(body.public).toBe(false);
+    expect(body.description).toBe(`Chat-Share snapshot ${session.id} ${encodeURIComponent(snapshot.epoch)} ${snapshot.window.maxSeq} locked`);
+    for (const secret of [session.title, session.cwd, 'synthetic full output', result.password!]) {
+      expect(content).not.toContain(secret); expect(body.description).not.toContain(secret);
+    }
+    const stored = parseStoredShare(content) as LockedShare;
+    const opened = await openLockedShare(stored, await deriveShareKey(result.password!, stored.kdf.salt));
+    expect(opened.session.title).toBe(session.title); expect(opened.entries).toEqual(timeline().entries);
+  });
+  it('generates a new password for each share', async () => {
+    const fetch = vi.fn().mockImplementation(async () => ok());
+    const shares = await Promise.all(Array.from({ length: 3 }, () => shareSession(settings, source, { fetch, readGh: async () => token, passwords: memory() }, true)));
+    expect(new Set(shares.map(share => share.password)).size).toBeGreaterThan(1);
+  });
+  it('still returns a working password when it cannot be saved', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const passwords: PasswordStore = { read: async () => ({}), save: async () => { throw new Error(token); } };
+    const result = await shareSession(settings, source, { fetch: vi.fn().mockResolvedValue(ok()), readGh: async () => token, passwords }, true);
+    expect(result.password).toMatch(/^\d{6}$/);
+    expect(JSON.stringify(error.mock.calls)).not.toContain(token);
+    error.mockRestore();
+  });
+  it('does not save a password for an upload that failed', async () => {
+    const passwords = memory();
+    await expect(shareSession(settings, source, { fetch: vi.fn().mockResolvedValue(new Response('', { status: 503 })), readGh: async () => token, passwords }, true)).rejects.toThrow('无法连接');
+    expect(passwords.saved).toEqual({});
+  });
+  it('says the encrypted size is what exceeded the limit, before credentials or network', async () => {
+    const fetch = vi.fn(), readGh = vi.fn(), share = maliciousShare();
+    share.session.title = 'x'.repeat(8_000_000);
+    await expect(uploadShare(share, settings, { fetch, readGh, passwords: memory() }, '482913')).rejects.toThrow('会话加密后过大');
+    expect(fetch).not.toHaveBeenCalled(); expect(readGh).not.toHaveBeenCalled();
+  });
+});
+
+describe('saved share passwords', () => {
+  it('survives a new store, keeps entries from simultaneous saves, and is readable only by its owner', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'chat-share-passwords-'));
+    try {
+      const path = join(directory, 'nested', 'share-passwords.json'), store = filePasswordStore(path);
+      expect(await store.read()).toEqual({});
+      await Promise.all([store.save('first', '111111'), store.save('second', '222222')]);
+      expect(await filePasswordStore(path).read()).toEqual({ first: '111111', second: '222222' });
+      expect((await stat(path)).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ first: '111111', second: '222222' });
+    } finally { await rm(directory, { recursive: true }); }
+  });
+  it.skipIf(process.getuid?.() === 0)('keeps saved passwords when the file cannot be read, instead of overwriting it', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'chat-share-passwords-'));
+    try {
+      const path = join(directory, 'share-passwords.json'), store = filePasswordStore(path);
+      await store.save('first', '111111');
+      await chmod(path, 0o000);
+      await expect(store.read()).rejects.toThrow();
+      await expect(store.save('second', '222222')).rejects.toThrow();
+      await chmod(path, 0o600);
+      expect(await store.read()).toEqual({ first: '111111' });
+      await store.save('third', '333333');
+      expect(await store.read()).toEqual({ first: '111111', third: '333333' });
+    } finally { await rm(directory, { recursive: true }); }
+  });
+  it('treats a damaged file as empty and drops malformed entries', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'chat-share-passwords-'));
+    try {
+      const path = join(directory, 'share-passwords.json'), store = filePasswordStore(path);
+      await store.save('good', '111111');
+      await writeFile(path, JSON.stringify({ good: '111111', short: '12', other: 5 }));
+      expect(await store.read()).toEqual({ good: '111111' });
+      await writeFile(path, 'not json');
+      expect(await store.read()).toEqual({});
+    } finally { await rm(directory, { recursive: true }); }
+  });
+});
+
 describe('gh-only server credentials', () => {
   it('invokes gh directly with no shell', async () => {
     expect(await ghToken()).toBe(token);
@@ -178,6 +268,24 @@ describe('snapshot discovery', () => {
     });
     expect(fetch).toHaveBeenCalledOnce();
     expect(JSON.stringify(links)).not.toContain(token);
+  });
+  it('restores a locked link with its saved password, and without one when this machine has none', async () => {
+    const lockedGist = (agentId: string, gistId: string) => ({ ...gist(agentId, 12, '2026-11-03T12:00:00Z', gistId), description: `${gist(agentId).description} locked` });
+    const known = 'b'.repeat(32), unknown = 'c'.repeat(32), read = vi.fn().mockResolvedValue({ [known]: '482913' });
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify([lockedGist('known', known), lockedGist('unknown', unknown), gist('plain')])));
+    const links = await listShareLinks(settings, { fetch, readGh: async () => token, passwords: { read, save: vi.fn() } });
+    const version = { epoch: snapshot.epoch, maxSeq: 12 };
+    expect(links).toEqual({
+      known: { url: `https://viewer.example/base/#owner/${known}`, version, locked: true, password: '482913' },
+      unknown: { url: `https://viewer.example/base/#owner/${unknown}`, version, locked: true },
+      plain: { url: `https://viewer.example/base/#owner/${id}`, version },
+    });
+  });
+  it('does not open the password file when no share is locked, and ignores an unknown fourth marker', async () => {
+    const read = vi.fn(), other = { ...gist('other'), description: `${gist('other').description} future` };
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify([gist('plain'), other])));
+    const links = await listShareLinks(settings, { fetch, readGh: async () => token, passwords: { read, save: vi.fn() } });
+    expect(Object.keys(links)).toEqual(['plain']); expect(read).not.toHaveBeenCalled();
   });
   it('finds older shares beyond three pages rather than reporting them as unshared', async () => {
     const unrelated = Array.from({ length: 100 }, () => ({ description: 'unrelated' }));

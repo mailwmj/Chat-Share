@@ -118,6 +118,51 @@ test('malicious content stays inert with real browser interactions; CSP blocks i
   expect(await page.evaluate(() => (window as unknown as { __xssExecuted?: boolean }).__xssExecuted)).toBeUndefined();
 });
 
+test('an encrypted share reveals nothing until the right password, under production CSP', async ({ page }) => {
+  await page.goto(`/?preview=locked${fragment}`);
+  const input = page.getByLabel('Enter the password to view this conversation');
+  await expect(input).toBeFocused();
+  await expect(page).toHaveTitle('Chat-Share');
+  await expect(page.locator('.timeline')).toHaveCount(0);
+  expect(await page.locator('body').innerText()).not.toContain(designShare().session.title);
+
+  await input.pressSequentially('000000');
+  await expect(page.locator('.lock-note.error')).toHaveText('Incorrect password.');
+  await expect(input).toHaveValue('');
+  await expect(input).toBeFocused();
+  await expect(page.locator('.timeline')).toHaveCount(0);
+
+  await input.fill('abc48x2913');
+  await expect(page.locator('.timeline')).toBeVisible();
+  await expect(page).toHaveTitle(new RegExp(designShare().session.title));
+  expect(await page.evaluate(() => (window as unknown as { __previewChecks: { csp: string[]; errors: number } }).__previewChecks)).toEqual({ csp: [], errors: 0 });
+
+  // Refreshing keeps the tab unlocked without keeping the password itself.
+  const stored = await page.evaluate(() => JSON.stringify(sessionStorage));
+  expect(stored).not.toContain('482913');
+  await page.reload();
+  await expect(page.locator('.timeline')).toBeVisible();
+  await expect(input).toHaveCount(0);
+
+  const event = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download', exact: true }).click();
+  expect(await readFile((await (await event).path())!, 'utf8')).toContain(designShare().session.title);
+});
+
+test('a new tab has to enter the password again, and a pasted link-plus-password message works', async ({ browser }) => {
+  const context = await browser.newContext({ locale: 'zh-CN', viewport: { width: 320, height: 700 } });
+  const first = await context.newPage();
+  await first.goto(`/?preview=locked${fragment}`);
+  const input = first.getByLabel('输入密码查看会话');
+  await input.fill(`https://chat-share.pages.dev/#local-preview/00000000000000000000000000000001\n密码：482913`);
+  await expect(first.locator('.timeline')).toBeVisible();
+  const second = await context.newPage();
+  await second.goto(`/?preview=locked${fragment}`);
+  await expect(second.getByLabel('输入密码查看会话')).toBeVisible();
+  expect(await second.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await context.close();
+});
+
 test('fragment payload cannot become DOM or a data request', async ({ page }) => {
   const requests: string[] = []; page.on('request', request => { if (request.url().startsWith('https://gist.')) requests.push(request.url()); });
   await page.goto('/#%3Cscript%3Ealert(1)%3C/script%3E');

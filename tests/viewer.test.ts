@@ -122,6 +122,12 @@ describe('raw Gist loading boundary', () => {
     expect(rawUrl(fragment)).toBe('https://gist.githubusercontent.com/synthetic-user/00000000000000000000000000000001/raw/chat-share.json');
     for (const payload of ['#<script>alert(1)</script>', '#user/../../x', '#user/id?token=secret', '#javascript:alert(1)']) expect(() => rawUrl(payload)).toThrow('invalid');
   });
+  it('still finds the share when a copied link and password were pasted into the address bar together', () => {
+    for (const tail of ['%E5%AF%86%E7%A0%81%EF%BC%9A482913', '%20%E5%AF%86%E7%A0%81%EF%BC%9A482913', '%0A%E5%AF%86%E7%A0%81']) {
+      expect(rawUrl(fragment + tail)).toBe(rawUrl(fragment));
+    }
+    for (const tail of ['/../../x', '?token=secret', '%3Cscript%3E']) expect(() => rawUrl(fragment + tail)).toThrow('invalid');
+  });
   it('fetches without credentials and validates the returned document', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(maliciousShare()))); vi.stubGlobal('fetch', fetch);
     expect((await loadShare(fragment)).version).toBe(1);
