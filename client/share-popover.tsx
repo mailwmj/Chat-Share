@@ -1,20 +1,24 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Animated, Easing, Platform, Pressable, Text, View } from 'react-native';
-import { useMutation } from '@tanstack/react-query';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { AccessibilityInfo, Animated, Easing, Platform, Pressable, Text, View } from 'react-native';
 import { usePaseo, useRpc, type PluginButtonContentProps, type PluginClientContext } from '@getpaseo/plugin/client';
 import { copyText, Icon, ScrollView, useToast } from '@getpaseo/plugin/client/ui';
-import { shareAgent } from '../shared/plugin';
+import { listShares, shareAgent } from '../shared/plugin';
 import { observeDirectory } from './directory';
+import { providerIcon } from './provider-icons';
 
 type AgentDirectory = Awaited<ReturnType<PluginClientContext['paseo']['agents']['list']>>;
 type PaseoAgent = AgentDirectory['entries'][number]['agent'];
 
 type Colors = PluginButtonContentProps['theme']['colors'];
+type Phase = 'checking' | 'share' | 'pending' | 'copied' | 'copy';
 
 const settle = Easing.bezier(0.25, 0.8, 0.25, 1);
 const nativeDriver = Platform.OS !== 'web';
 const fill = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 } as const;
 const COPIED_MS = 1600;
+// The host caps a popover surface at 420 x 440, with 12px of padding this panel pulls back by 8px.
+const PANEL_WIDTH = 404, LIST_MAX_HEIGHT = 416;
+const ACTION_WIDTH = 88, SWEEP_WIDTH = 36;
 
 function useReducedMotion() {
   const [reduced, setReduced] = useState(false);
@@ -34,6 +38,17 @@ function useTween(target: number, duration: number, still: boolean, { from = tar
     run.start();
     return () => run.stop();
   }, [target, still]);
+  return value;
+}
+
+function useLoop(duration: number, still: boolean, easing: (value: number) => number) {
+  const value = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (still) return;
+    const run = Animated.loop(Animated.timing(value, { toValue: 1, duration, easing, useNativeDriver: nativeDriver }));
+    run.start();
+    return () => run.stop();
+  }, [still]);
   return value;
 }
 
@@ -72,114 +87,196 @@ function FadeIn({ still, delay = 0, children }: { still: boolean; delay?: number
   return <Animated.View style={{ opacity }}>{children}</Animated.View>;
 }
 
-function AgentRow({ agent, colors, height, still, active, dimmed, disabled, onPress }: {
-  agent: PaseoAgent; colors: Colors; height: number; still: boolean; active: boolean; dimmed: boolean; disabled: boolean; onPress(): void;
-}) {
+function FaceMotion({ shown, still, children }: { shown: boolean; still: boolean; children: ReactNode }) {
+  const opacity = useTween(shown ? 1 : 0, shown ? 150 : 80, still, { from: 0, delay: shown ? 50 : 0 });
+  const rise = useTween(shown ? 0 : -4, shown ? 180 : 80, still, { from: 4 });
+  return <Animated.View pointerEvents="none" style={{ ...fill, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, opacity, transform: [{ translateY: rise }] }}>{children}</Animated.View>;
+}
+
+/** One state of the action. The outgoing face lifts away while the next rises into the same fixed box. */
+function Face({ shown, still, children }: { shown: boolean; still: boolean; children: ReactNode }) {
+  return usePresence(shown, still ? 0 : 120) ? <FaceMotion shown={shown} still={still}>{children}</FaceMotion> : null;
+}
+
+function Label({ colors, children }: { colors: Colors; children: string }) {
+  return <Text numberOfLines={1} style={{ color: colors.foreground, fontSize: 13, lineHeight: 16 }}>{children}</Text>;
+}
+
+function Spinner({ colors, still }: { colors: Colors; still: boolean }) {
+  const turn = useLoop(800, still, Easing.linear);
+  const rotate = turn.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+  return <Animated.View style={{ width: 14, height: 14, transform: [{ rotate }] }}><Icon name="LoaderCircle" size={14} color={colors.foregroundMuted} /></Animated.View>;
+}
+
+/** A band crossing the action while GitHub creates the link. */
+function Sweep({ colors, still }: { colors: Colors; still: boolean }) {
+  const travel = useLoop(1100, still, settle);
+  const translateX = travel.interpolate({ inputRange: [0, 1], outputRange: [-SWEEP_WIDTH, ACTION_WIDTH] });
+  if (still) return null;
+  return <Animated.View pointerEvents="none" style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: SWEEP_WIDTH, backgroundColor: colors.foreground, opacity: 0.08, transform: [{ translateX }] }} />;
+}
+
+function CheckMark({ colors, still }: { colors: Colors; still: boolean }) {
+  const scale = useTween(1, 220, still, { from: 0.5, easing: Easing.out(Easing.back(2)) });
+  return <Animated.View style={{ transform: [{ scale }] }}><Icon name="Check" size={14} color={colors.statusSuccess} /></Animated.View>;
+}
+
+function ShareAction({ colors, height, still, phase, title, onPress }: { colors: Colors; height: number; still: boolean; phase: Phase; title: string; onPress(): void }) {
   const [hovered, setHovered] = useState(false), [down, setDown] = useState(false);
+  const disabled = phase === 'checking' || phase === 'pending';
   useEffect(() => { if (disabled) { setHovered(false); setDown(false); } }, [disabled]);
-  const lit = active || hovered || down;
-  const wash = useTween(lit ? 1 : 0, lit ? 80 : 160, still);
-  const scale = useTween(down ? 0.985 : 1, down ? 60 : 140, still);
-  const opacity = useTween(dimmed ? 0.45 : 1, 150, still);
-  const title = agent.title || '未命名会话';
-  return <Animated.View style={{ opacity, transform: [{ scale }] }}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`分享 ${title}`} accessibilityState={{ selected: active, disabled }} disabled={disabled} onPress={onPress}
+  // An unshared row stays an outline; a filled action means this conversation already has a link.
+  const filled = phase === 'pending' || phase === 'copied' || phase === 'copy' || (phase === 'share' && (hovered || down));
+  const wash = useTween(filled ? 1 : 0, filled ? 100 : 160, still);
+  const lift = useTween(hovered && phase !== 'share' ? 0.08 : 0, hovered ? 80 : 160, still);
+  const scale = useTween(down ? 0.97 : 1, down ? 60 : 140, still);
+  const sweep = usePresence(phase === 'pending', still ? 0 : 120);
+  const label = phase === 'pending' ? `正在创建 ${title} 的分享链接` : phase === 'copied' || phase === 'copy' ? `复制 ${title} 的链接` : `分享 ${title}`;
+  return <Animated.View style={{ transform: [{ scale }] }}>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled, busy: phase === 'pending' }} disabled={disabled} onPress={onPress}
       onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)} onPressIn={() => setDown(true)} onPressOut={() => setDown(false)}
-      style={{ minHeight: height, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 8 }}>
-      <Animated.View pointerEvents="none" style={{ ...fill, borderRadius: 6, backgroundColor: colors.surface2, opacity: wash }} />
-      <Text numberOfLines={1} style={{ flex: 1, color: colors.foreground, fontSize: 14, lineHeight: 18 }}>{title}</Text>
-      <Text style={{ color: colors.foregroundMuted, fontSize: 12, lineHeight: 16 }}>{agent.provider}</Text>
+      style={{ width: ACTION_WIDTH, height, borderRadius: 6, overflow: 'hidden', borderWidth: 1, borderColor: filled ? 'transparent' : colors.border }}>
+      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash }} />
+      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.foreground, opacity: lift }} />
+      {sweep && <Sweep colors={colors} still={still} />}
+      <Face shown={phase === 'share'} still={still}><Icon name="Share" size={14} color={colors.foregroundMuted} /><Label colors={colors}>分享</Label></Face>
+      <Face shown={phase === 'pending'} still={still}><Spinner colors={colors} still={still} /><Label colors={colors}>创建中</Label></Face>
+      <Face shown={phase === 'copied'} still={still}><CheckMark colors={colors} still={still} /><Label colors={colors}>已复制</Label></Face>
+      <Face shown={phase === 'copy'} still={still}><Icon name="Copy" size={14} color={colors.foregroundMuted} /><Label colors={colors}>复制链接</Label></Face>
     </Pressable>
   </Animated.View>;
 }
 
-function SkeletonRows({ colors, height, still }: { colors: Colors; height: number; still: boolean }) {
+function ReshareAction({ colors, size, still, disabled, title, onPress }: { colors: Colors; size: number; still: boolean; disabled: boolean; title: string; onPress(): void }) {
+  const [hovered, setHovered] = useState(false);
+  useEffect(() => { if (disabled) setHovered(false); }, [disabled]);
+  const wash = useTween(hovered ? 1 : 0, hovered ? 80 : 160, still);
+  const opacity = useTween(disabled ? 0.4 : 1, 150, still);
+  return <Animated.View style={{ opacity }}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`重新分享 ${title}`} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+      onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
+      style={{ width: size, height: size, borderRadius: 6, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
+      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash }} />
+      <Icon name="RefreshCw" size={14} color={colors.foregroundMuted} />
+    </Pressable>
+  </Animated.View>;
+}
+
+function AgentRow({ agent, colors, height, actionHeight, still, phase, link, error, copyFailed, onShare, onCopy }: {
+  agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; link?: string; error?: string; copyFailed: boolean; onShare(): void; onCopy(url: string): void;
+}) {
+  const title = agent.title || '未命名会话';
+  const textInset = { paddingLeft: 32, paddingRight: 8, paddingBottom: 8, fontSize: 13, lineHeight: 18 };
+  return <View>
+    <View style={{ minHeight: height, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
+      <View accessibilityRole="image" accessibilityLabel={agent.provider} style={{ width: 16, height: 16 }}><Icon {...providerIcon(agent.provider)} size={16} color={colors.foregroundMuted} /></View>
+      <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: colors.foreground, fontSize: 14, lineHeight: 18 }}>{title}</Text>
+      {link !== undefined && <FadeIn still={still}><ReshareAction colors={colors} size={actionHeight} still={still} disabled={phase === 'pending'} title={title} onPress={onShare} /></FadeIn>}
+      <ShareAction colors={colors} height={actionHeight} still={still} phase={phase} title={title} onPress={() => { if (link === undefined) onShare(); else onCopy(link); }} />
+    </View>
+    <Collapse open={!!error} still={still}>
+      <Text accessibilityRole="alert" style={{ ...textInset, color: colors.statusDanger }}>{error}</Text>
+    </Collapse>
+    <Collapse open={copyFailed && !!link} still={still}>
+      <Text selectable style={{ ...textInset, color: colors.foreground }}>{link}</Text>
+    </Collapse>
+  </View>;
+}
+
+function SkeletonRows({ colors, height, actionHeight, still }: { colors: Colors; height: number; actionHeight: number; still: boolean }) {
   return <FadeIn still={still} delay={120}>
-    <View accessibilityLabel="正在读取会话…">
-      {[62, 44, 54].map(width => <View key={width} style={{ height, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 8 }}>
+    <View accessibilityLabel="正在读取会话…" style={{ gap: 2 }}>
+      {[62, 44, 54].map(width => <View key={width} style={{ height, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
+        <View style={{ width: 16, height: 16, borderRadius: 4, backgroundColor: colors.surface2 }} />
         <View style={{ flex: 1 }}><View style={{ width: `${width}%`, height: 8, borderRadius: 4, backgroundColor: colors.surface2 }} /></View>
-        <View style={{ width: 34, height: 6, borderRadius: 3, backgroundColor: colors.surface2 }} />
+        <View style={{ width: ACTION_WIDTH, height: actionHeight, borderRadius: 6, backgroundColor: colors.surface2, opacity: 0.5 }} />
       </View>)}
     </View>
   </FadeIn>;
 }
 
-function CopyButton({ colors, height, still, disabled, copied, onPress }: { colors: Colors; height: number; still: boolean; disabled: boolean; copied: boolean; onPress(): void }) {
-  const [hovered, setHovered] = useState(false);
-  useEffect(() => { if (disabled) setHovered(false); }, [disabled]);
-  const wash = useTween(hovered ? 0.08 : 0, hovered ? 80 : 160, still);
-  const opacity = useTween(disabled ? 0.5 : 1, 150, still);
-  const idle = useTween(copied ? 0 : 1, 100, still);
-  const done = useTween(copied ? 1 : 0, copied ? 180 : 100, still);
-  const pop = useTween(copied ? 1 : 0.6, 200, still, { easing: Easing.out(Easing.back(2)) });
-  return <Animated.View style={{ opacity }}>
-    <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
-      style={{ height, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, borderRadius: 6, overflow: 'hidden', backgroundColor: colors.surface2 }}>
-      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.foreground, opacity: wash }} />
-      <View style={{ width: 14, height: 14 }}>
-        <Animated.View style={{ ...fill, opacity: idle }}><Icon name="Copy" size={14} color={colors.foregroundMuted} /></Animated.View>
-        <Animated.View style={{ ...fill, opacity: done, transform: [{ scale: pop }] }}><Icon name="Check" size={14} color={colors.statusSuccess} /></Animated.View>
-      </View>
-      <Text style={{ color: colors.foreground, fontSize: 13, lineHeight: 16 }}>复制链接</Text>
-    </Pressable>
-  </Animated.View>;
+interface ShareState {
+  /** False until the first lookup settles; offering 分享 before then would create duplicate links. */
+  checked: boolean;
+  links: Readonly<Record<string, string>>;
+  pending: ReadonlySet<string>;
+  errors: Readonly<Record<string, string>>;
 }
 
-function LinkField({ colors, height, still, link, pending, expanded }: { colors: Colors; height: number; still: boolean; link: string; pending: boolean; expanded: boolean }) {
-  const url = useTween(pending ? 0 : 1, pending ? 80 : 160, still, { delay: pending ? 0 : 80 });
-  const status = useTween(pending ? 1 : 0, pending ? 140 : 80, still, { delay: pending ? 80 : 0 });
-  const statusPresent = usePresence(pending, still ? 0 : 100);
-  return <View style={{ flex: 1, minWidth: 0, minHeight: height, justifyContent: 'center', paddingHorizontal: 10, paddingVertical: (height - 16) / 2, borderRadius: 6, backgroundColor: colors.surface0 }}>
-    <Animated.View style={{ opacity: url }}>
-      <Text selectable numberOfLines={expanded ? undefined : 1} style={{ color: colors.foreground, fontSize: 13, lineHeight: 16 }}>{link}</Text>
-    </Animated.View>
-    {statusPresent && <Animated.View pointerEvents="none" style={{ ...fill, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, opacity: status }}>
-      <ActivityIndicator size="small" color={colors.foregroundMuted} style={{ transform: [{ scale: 0.7 }], width: 16, height: 16 }} />
-      <Text accessibilityLiveRegion="polite" style={{ color: colors.foregroundMuted, fontSize: 13, lineHeight: 16 }}>正在分享…</Text>
-    </Animated.View>}
-  </View>;
+function createShareStore() {
+  let state: ShareState = { checked: false, links: {}, pending: new Set(), errors: {} };
+  // Links made this session win over a lookup that may have started before GitHub listed them.
+  const created: Record<string, string> = {};
+  const listeners = new Set<() => void>();
+  const set = (next: Partial<ShareState>) => { state = { ...state, ...next }; for (const listener of listeners) listener(); };
+  const settled = (agentId: string) => {
+    const pending = new Set(state.pending);
+    pending.delete(agentId);
+    return pending;
+  };
+  return {
+    get: () => state,
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    checked(links?: Record<string, string>) { set({ checked: true, links: links ? { ...links, ...created } : state.links }); },
+    /** False when this agent is already uploading. */
+    begin(agentId: string) {
+      if (state.pending.has(agentId)) return false;
+      const { [agentId]: _cleared, ...errors } = state.errors;
+      set({ pending: new Set(state.pending).add(agentId), errors });
+      return true;
+    },
+    succeed(agentId: string, url: string) {
+      created[agentId] = url;
+      set({ pending: settled(agentId), links: { ...state.links, [agentId]: url } });
+    },
+    fail(agentId: string, message: string) { set({ pending: settled(agentId), errors: { ...state.errors, [agentId]: message } }); },
+  };
 }
 
-/** An installation keeps a pending upload across popover closes and workspace switches. */
+/** An installation keeps uploads and known links across popover closes and workspace switches. */
 export function createSharePopover() {
-  let inFlight: Promise<{ url: string }> | undefined;
-  const links = new Map<string, { url: string; agentId: string }>();
+  const store = createShareStore();
   return function SharePopover({ workspaceId, theme, layout }: PluginButtonContentProps) {
-    const paseo = usePaseo(), rpc = useRpc(shareAgent), toast = useToast(), colors = theme.colors, still = useReducedMotion();
+    const paseo = usePaseo(), rpc = useRpc(shareAgent), lookup = useRpc(listShares), toast = useToast(), colors = theme.colors, still = useReducedMotion();
+    const shares = useSyncExternalStore(store.subscribe, store.get);
     const [agents, setAgents] = useState<PaseoAgent[] | null>(null);
     const [listFailed, setListFailed] = useState(false);
-    const [shared, setShared] = useState(links.get(workspaceId));
-    const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+    const [copied, setCopied] = useState<string | null>(null);
+    const [copyFailed, setCopyFailed] = useState<string | null>(null);
     const copiedTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-    useEffect(() => () => clearTimeout(copiedTimer.current), []);
+    const open = useRef(false);
+    useEffect(() => {
+      open.current = true;
+      void lookup({}).then(({ links }) => store.checked(links), () => store.checked());
+      return () => { open.current = false; clearTimeout(copiedTimer.current); };
+    }, []);
     const recentFirst = (entries: PaseoAgent[]) => entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
-    const pressed = useRef(false);
-    async function copy(url: string) {
+    async function copy(agentId: string, url: string) {
       clearTimeout(copiedTimer.current);
       try {
         await copyText(url);
         toast.show('链接已复制', { variant: 'success' });
-        setCopyState('copied');
-        copiedTimer.current = setTimeout(() => setCopyState('idle'), COPIED_MS);
-      } catch { setCopyState('failed'); toast.error('复制失败，请复制下方链接。'); }
+        setCopyFailed(null);
+        setCopied(agentId);
+        copiedTimer.current = setTimeout(() => setCopied(null), COPIED_MS);
+      } catch { setCopied(null); setCopyFailed(agentId); toast.error('复制失败，请复制下方链接。'); }
     }
-    const upload = useMutation({
-      mutationFn: (agentId: string) => {
-        const pending = rpc({ agentId }).catch(() => { throw new Error('分享失败，请稍后重试。'); }).then(result => {
-          if ('error' in result) throw new Error(result.error);
-          return result;
-        });
-        inFlight = pending;
-        const clear = () => { if (inFlight === pending) inFlight = undefined; };
-        void pending.then(clear, clear);
-        return pending;
-      },
-      onMutate: () => { clearTimeout(copiedTimer.current); setCopyState('idle'); },
-      onSuccess: async ({ url }, agentId) => { const next = { url, agentId }; links.set(workspaceId, next); setShared(next); await copy(url); },
-      onError: (error: Error) => toast.error(error.message),
-      onSettled: () => { pressed.current = false; },
-      retry: false,
-    });
+    async function share(agentId: string) {
+      if (!store.begin(agentId)) return;
+      try {
+        const result = await rpc({ agentId }).catch(() => { throw new Error('分享失败，请稍后重试。'); });
+        if ('error' in result) throw new Error(result.error);
+        store.succeed(agentId, result.url);
+        setCopyFailed(current => current === agentId ? null : current);
+        // A closed popover must not overwrite whatever the user has copied since.
+        if (open.current) await copy(agentId, result.url);
+        else toast.show('分享链接已创建', { variant: 'success' });
+      } catch (error) {
+        const message = (error as Error).message;
+        store.fail(agentId, message);
+        toast.error(message);
+      }
+    }
     useEffect(() => {
       return observeDirectory(
         (cursor, subscribe) => paseo.agents.list({ filter: { includeArchived: false, includeBackground: true }, page: { limit: 200, cursor }, ...(subscribe ? { subscribe: {} } : {}) }),
@@ -201,30 +298,21 @@ export function createSharePopover() {
             error: () => setListFailed(true),
         });
     }, [paseo, workspaceId]);
-    const rowHeight = layout.compact ? 40 : 32, controlHeight = layout.compact ? 40 : 32;
+    const rowHeight = layout.compact ? 52 : 40, actionHeight = layout.compact ? 40 : 30;
     const message = { paddingHorizontal: 8, paddingVertical: 8, fontSize: 13, lineHeight: 18 };
-    const activeId = upload.isPending ? upload.variables : shared?.agentId;
-    return <View style={{ margin: -8, ...(layout.compact ? {} : { width: 348 }) }}>
+    const phaseOf = (agentId: string): Phase => shares.pending.has(agentId) ? 'pending'
+      : copied === agentId ? 'copied'
+      : shares.links[agentId] !== undefined ? 'copy'
+      : shares.checked ? 'share' : 'checking';
+    return <View style={{ margin: -8, ...(layout.compact ? {} : { width: PANEL_WIDTH }) }}>
       <Collapse open still={still}>
         {listFailed ? <Text style={{ ...message, color: colors.statusDanger }}>读取会话失败，请重新打开。</Text>
-          : agents === null ? <SkeletonRows colors={colors} height={rowHeight} still={still} />
+          : agents === null ? <SkeletonRows colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} />
           : agents.length === 0 ? <Text style={{ ...message, color: colors.foregroundMuted }}>暂无会话</Text>
-          : <FadeIn still={still}><ScrollView style={{ maxHeight: 288 }} contentContainerStyle={{ gap: 2 }} bounces={false}>{agents.map(agent =>
-            <AgentRow key={agent.id} agent={agent} colors={colors} height={rowHeight} still={still} active={agent.id === activeId}
-              dimmed={upload.isPending && agent.id !== activeId} disabled={upload.isPending} onPress={() => {
-                if (pressed.current || inFlight) return;
-                pressed.current = true;
-                upload.mutate(agent.id);
-              }} />)}</ScrollView></FadeIn>}
-      </Collapse>
-      <Collapse open={upload.isError} still={still}>
-        <Text accessibilityRole="alert" style={{ ...message, color: colors.statusDanger }}>{upload.error?.message}</Text>
-      </Collapse>
-      <Collapse open={upload.isPending || !!shared} still={still}>
-        <View style={{ marginTop: 4, paddingTop: 8, paddingHorizontal: 8, paddingBottom: 4, flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderTopWidth: 1, borderColor: colors.border }}>
-          <LinkField colors={colors} height={controlHeight} still={still} link={shared?.url ?? ''} pending={upload.isPending} expanded={copyState === 'failed'} />
-          <CopyButton colors={colors} height={controlHeight} still={still} disabled={!shared || upload.isPending} copied={copyState === 'copied'} onPress={() => { if (shared) void copy(shared.url); }} />
-        </View>
+          : <FadeIn still={still}><ScrollView style={{ maxHeight: LIST_MAX_HEIGHT }} contentContainerStyle={{ gap: 2 }} bounces={false}>{agents.map(agent =>
+            <AgentRow key={agent.id} agent={agent} colors={colors} height={rowHeight} actionHeight={actionHeight} still={still} phase={phaseOf(agent.id)}
+              link={shares.links[agent.id]} error={shares.errors[agent.id]} copyFailed={copyFailed === agent.id}
+              onShare={() => void share(agent.id)} onCopy={url => void copy(agent.id, url)} />)}</ScrollView></FadeIn>}
       </Collapse>
     </View>;
   };

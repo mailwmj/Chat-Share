@@ -19,6 +19,10 @@ const messages = {
   rate: 'GitHub 请求受限。请等待限流解除后重试。',
 };
 
+const GIST_DESCRIPTION = 'Chat-Share snapshot';
+const GIST_PAGE_SIZE = 100, GIST_PAGES = 3;
+const GITHUB_LOGIN = /^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i, GIST_ID = /^[a-f\d]{20,40}$/i;
+
 /** Never propagate execFile's error: it can contain stdout/stderr credentials. */
 export function ghToken(): Promise<string> {
   return new Promise(resolve => {
@@ -59,7 +63,7 @@ export async function uploadShare(share: ShareDocument, settings: ShareSettings,
     response = await (dependencies.fetch ?? fetch)('https://api.github.com/gists', {
       method: 'POST', redirect: 'error', signal: controller.signal,
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' },
-      body: JSON.stringify({ public: false, description: 'Chat-Share snapshot', files: { [SHARE_FILENAME]: { content } } }),
+      body: JSON.stringify({ public: false, description: `${GIST_DESCRIPTION} ${share.session.id}`, files: { [SHARE_FILENAME]: { content } } }),
     });
     if (response.ok) value = await response.json();
   } catch { throw new ShareFailure(messages.network); }
@@ -71,11 +75,11 @@ export async function uploadShare(share: ShareDocument, settings: ShareSettings,
   if (!response.ok) throw new ShareFailure(messages.network);
   // Accept only fields that can form a viewer fragment, never an echoed message or token.
   if (!isObject(value) || value.public !== false || !isObject(value.owner) || typeof value.owner.login !== 'string'
-    || !/^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(value.owner.login)
-    || typeof value.id !== 'string' || !/^[a-f\d]{20,40}$/i.test(value.id)
+    || !GITHUB_LOGIN.test(value.owner.login)
+    || typeof value.id !== 'string' || !GIST_ID.test(value.id)
     || value.owner.login.includes(token) || value.id.includes(token)) {
     // A successful POST may still have an unusable response. Remove its known Gist if possible.
-    if (isObject(value) && typeof value.id === 'string' && /^[a-f\d]{20,40}$/i.test(value.id) && !value.id.includes(token)) {
+    if (isObject(value) && typeof value.id === 'string' && GIST_ID.test(value.id) && !value.id.includes(token)) {
       const cleanup = new AbortController(), timeout = setTimeout(() => cleanup.abort(), 10_000);
       try {
         await (dependencies.fetch ?? fetch)(`https://api.github.com/gists/${value.id}`, {
@@ -88,6 +92,38 @@ export async function uploadShare(share: ShareDocument, settings: ShareSettings,
   }
   viewer.hash = `${value.owner.login}/${value.id}`;
   return { url: viewer.href };
+}
+
+/** GitHub is the record of what is shared, so a Gist deleted to revoke its link stops being offered. */
+export async function listShareLinks(settings: ShareSettings, dependencies: Parameters<typeof uploadShare>[2] = {}): Promise<Record<string, string>> {
+  const viewer = viewerBase(settings.viewerUrl);
+  const token = await resolveToken(dependencies.readGh);
+  const newest = new Map<string, { createdAt: string; url: string }>();
+  for (let page = 1; page <= GIST_PAGES; page++) {
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10_000);
+    let gists: unknown;
+    try {
+      const response = await (dependencies.fetch ?? fetch)(`https://api.github.com/gists?per_page=${GIST_PAGE_SIZE}&page=${page}`, {
+        redirect: 'error', signal: controller.signal,
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+      });
+      if (!response.ok) throw new Error();
+      gists = await response.json();
+    } catch { throw new ShareFailure(messages.network); }
+    finally { clearTimeout(timeout); }
+    if (!Array.isArray(gists)) throw new ShareFailure(messages.network);
+    for (const gist of gists as unknown[]) {
+      if (!isObject(gist) || gist.public !== false || typeof gist.description !== 'string' || typeof gist.created_at !== 'string'
+        || typeof gist.id !== 'string' || !GIST_ID.test(gist.id) || !isObject(gist.owner) || typeof gist.owner.login !== 'string' || !GITHUB_LOGIN.test(gist.owner.login)) continue;
+      const agentId = gist.description.startsWith(`${GIST_DESCRIPTION} `) ? gist.description.slice(GIST_DESCRIPTION.length + 1) : '';
+      if (!agentId || /\s/.test(agentId) || (newest.get(agentId)?.createdAt ?? '') >= gist.created_at) continue;
+      const link = new URL(viewer);
+      link.hash = `${gist.owner.login}/${gist.id}`;
+      newest.set(agentId, { createdAt: gist.created_at, url: link.href });
+    }
+    if (gists.length < GIST_PAGE_SIZE) break;
+  }
+  return Object.fromEntries([...newest].map(([agentId, { url }]) => [agentId, url]));
 }
 
 export async function shareSession(settings: ShareSettings, source: () => Promise<ShareSource>, dependencies: Parameters<typeof uploadShare>[2] = {}): Promise<{ url: string }> {

@@ -1,7 +1,7 @@
 import type { PluginServerContext } from '@getpaseo/plugin/server';
-import { preferences, shareAgent } from './shared/plugin';
+import { listShares, preferences, shareAgent } from './shared/plugin';
 import type { Refetch } from './shared/snapshot';
-import { ShareFailure, shareSession } from './server/share';
+import { listShareLinks, ShareFailure, shareSession } from './server/share';
 
 export default function contribute(server: PluginServerContext) {
   const settings = server.registerSettings(preferences);
@@ -24,6 +24,13 @@ export default function contribute(server: PluginServerContext) {
     } catch (error) {
       return { error: error instanceof ShareFailure ? error.message : '分享失败，请稍后重试。' };
     }
+  });
+  // A failed lookup only means known links are not offered again; sharing reports the real problem.
+  server.handle(listShares, async () => {
+    try {
+      const current = await settings.read();
+      return { links: current.status === 'ready' ? await listShareLinks(current.values) : {} };
+    } catch { return { links: {} }; }
   });
   return () => {};
 }

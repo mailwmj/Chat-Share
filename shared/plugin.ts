@@ -23,3 +23,9 @@ export const shareAgent = defineRpc({
   input: z.object({ agentId: z.string().min(1) }),
   output: z.union([z.object({ url: z.string().url() }), z.object({ error: z.string() })]),
 });
+
+export const listShares = defineRpc({
+  name: 'list-shares',
+  input: z.object({}),
+  output: z.object({ links: z.record(z.string(), z.string().url()) }),
+});
