@@ -184,21 +184,6 @@ function useSnapshotFreshness(agentId: string, shared?: SharedSnapshot) {
   return { fresh: result?.shared === shared ? result?.fresh : undefined, failed };
 }
 
-function ReshareAction({ colors, size, still, disabled, title, onPress }: { colors: Colors; size: number; still: boolean; disabled: boolean; title: string; onPress(): void }) {
-  const [hovered, setHovered] = useState(false);
-  useEffect(() => { if (disabled) setHovered(false); }, [disabled]);
-  const wash = useTween(hovered ? 1 : 0, hovered ? 80 : 160, still);
-  const opacity = useTween(disabled ? 0.4 : 1, 150, still);
-  return <Animated.View style={{ opacity }}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`重新分享 ${title}`} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
-      onHoverIn={() => setHovered(true)} onHoverOut={() => setHovered(false)}
-      style={{ width: size, height: size, borderRadius: 6, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
-      <Animated.View pointerEvents="none" style={{ ...fill, backgroundColor: colors.surface2, opacity: wash }} />
-      <Icon name="RefreshCw" size={14} color={colors.foregroundMuted} />
-    </Pressable>
-  </Animated.View>;
-}
-
 function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, error, copyFailed, onShare, onCopy }: {
   agent: PaseoAgent; colors: Colors; height: number; actionHeight: number; still: boolean; phase: Phase; shared?: SharedSnapshot; error?: string; copyFailed: boolean; onShare(): void; onCopy(url: string): void;
 }) {
@@ -211,7 +196,6 @@ function AgentRow({ agent, colors, height, actionHeight, still, phase, shared, e
     <View style={{ minHeight: height, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8 }}>
       <View accessibilityRole="image" accessibilityLabel={agent.provider} style={{ width: 16, height: 16 }}><Icon {...providerIcon(agent.provider)} size={16} color={colors.foregroundMuted} /></View>
       <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, color: colors.foreground, fontSize: 14, lineHeight: 18 }}>{title}</Text>
-      {shared && fresh === true && <FadeIn still={still}><ReshareAction colors={colors} size={actionHeight} still={still} disabled={phase === 'pending'} title={title} onPress={onShare} /></FadeIn>}
       <ShareAction colors={colors} height={actionHeight} still={still} phase={currentPhase} title={title} onPress={() => { if (shared && fresh === true) onCopy(shared.url); else onShare(); }} />
     </View>
     <Collapse open={!!error} still={still}>

@@ -179,14 +179,6 @@ describe('share popover', () => {
     await act(async () => dir.update({ type: 'agent_update', payload: { kind: 'upsert', agent: agent('old', 'Older', '2026-11-03T10:00:00Z') } }));
     expect(titles()).toEqual(['分享 Older', '分享 Newer']);
   });
-  it('allows explicitly resharing a current snapshot without copying the old link', async () => {
-    host.lookup.mockResolvedValue({ links: { a: shared() } });
-    host.rpc.mockResolvedValue(shared('b'));
-    const { click } = await mountPopover();
-    await click('重新分享 First');
-    expect(host.rpc).toHaveBeenCalledExactlyOnceWith({ agentId: 'a' });
-    expect(host.copy).toHaveBeenCalledExactlyOnceWith(shared('b').url);
-  });
   it('copies an existing snapshot, ignores title changes, and replaces copying with regeneration when content arrives', async () => {
     const live = timeline(); host.timeline.mockReturnValue(live); host.lookup.mockResolvedValue({ links: { a: shared() } });
     host.copy.mockResolvedValue(undefined);
